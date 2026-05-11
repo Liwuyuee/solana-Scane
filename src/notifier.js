@@ -117,7 +117,23 @@ class Notifier {
     msg += "\n";
     msg += launch.emoji + " **" + launch.label + " " + launch.score + "/10**";
     if (launch.detail) msg += " — " + launch.detail;
-    msg += "\n\n";
+    msg += "\n";
+
+    // ─── 涨幅潜力 ─────────────────────────────────
+    var growth = ev && ev.growth;
+    if (growth && growth.score > 0) {
+      msg += growth.emoji + " **" + growth.label + " " + growth.score + "/10**";
+      if (growth.detail) msg += " — " + growth.detail;
+      msg += "\n";
+
+      // 信号明细
+      if (growth.signals && growth.signals.length > 0) {
+        for (var g = 0; g < growth.signals.length; g++) {
+          msg += "  · " + growth.signals[g] + "\n";
+        }
+      }
+    }
+    msg += "\n";
 
     // ─── Holder 信息 ──────────────────────────────
     if (holders && holders.totalHolders > 0) {

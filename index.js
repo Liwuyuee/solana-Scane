@@ -59,9 +59,12 @@ async function main() {
       console.log(`   部署者: ${devInfo.risk} (${devInfo.tokensCreated}个代币)`);
     }
 
-    // 3) 四项评分 + 叙事生成
-    const evalResult = analyzer.evaluate(report, devInfo);
+    // 3) 四项评分 + 涨幅潜力 + 叙事生成
+    const evalResult = analyzer.evaluate(report, devInfo, token.dexInfo);
     console.log(`   总分: ${evalResult.total}/40 · ${evalResult.action}`);
+    if (evalResult.growth && evalResult.growth.score > 0) {
+      console.log(`   涨幅潜力: ${evalResult.growth.score}/10 ${evalResult.growth.emoji}`);
+    }
 
     // 4) AI 叙事增强
     const aiNarrative = await narrator.generate(token, report, evalResult, report?.holders, devInfo);

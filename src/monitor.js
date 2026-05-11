@@ -166,7 +166,7 @@ class Monitor {
             token.name = p.baseToken.name || token.name;
             token.symbol = p.baseToken.symbol || token.symbol;
 
-            // 保存交易对信息
+            // 保存交易对信息（含交易量、价格变化）
             token.dexInfo = {
               dexName: p.dexId || "",
               pairAddress: p.pairAddress || "",
@@ -174,6 +174,11 @@ class Monitor {
               liquidityUsd: p.liquidity && p.liquidity.usd || 0,
               fdv: p.fdv || 0,
               priceUsd: p.priceUsd || 0,
+              priceChange24h: p.priceChange && p.priceChange.h24 || 0,
+              volume24h: p.volume && p.volume.h24 || 0,
+              volume6h: p.volume && p.volume.h6 || 0,
+              volume1h: p.volume && p.volume.h1 || 0,
+              txns24h: p.txns && p.txns.h24 || { buys: 0, sells: 0 },
               url: p.url || "",
             };
             break;

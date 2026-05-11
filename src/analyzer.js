@@ -44,12 +44,13 @@ class Analyzer {
    * @param {object} devInfo  devTracker.record() 返回值
    * @returns {{ total, rugRisk, codeQuality, innovation, launchQ, summary, highlights, warnings }}
    */
-  evaluate(report, devInfo) {
+  evaluate(report, devInfo, dexInfo) {
     if (!report) return this.#emptyEval();
 
     const holders = report.holders || {};
     const four = this.#calcScores(report, holders, devInfo);
     const honeypot = this.#checkHoneypot(report);
+    const growth = this.#calcGrowth(dexInfo, holders);
     const narrative = this.#buildNarrative(report, four, holders, devInfo, honeypot);
 
     return {
@@ -58,6 +59,7 @@ class Analyzer {
       codeQuality: four.codeQuality,
       innovation: four.innovation,
       launchQ: four.launchQ,
+      growth: growth,
       honeypot: honeypot,
       summary: narrative.summary,
       highlights: narrative.highlights,
@@ -116,6 +118,88 @@ class Analyzer {
       codeQuality: { score: code, label: "代码靠谱", emoji: code >= 7 ? "🟩" : code >= 4 ? "🟨" : "🟥" },
       innovation:  { score: innovation, label: "玩法新鲜", emoji: innovation >= 7 ? "🟩" : innovation >= 4 ? "🟨" : "🟥" },
       launchQ:     { score: launch, label: "启动质量", emoji: launch >= 7 ? "🟩" : launch >= 4 ? "🟨" : "🟥" },
+    };
+  }
+
+  // ─── 涨幅潜力评估 ──────────────────────────────────
+
+  #calcGrowth(dexInfo, holders) {
+    var score = 5; // 默认中等
+    var signals = [];
+
+    if (!dexInfo) {
+      return { score: 0, label: "涨幅潜力", emoji: "⬜", detail: "暂无可用的市场数据", signals: ["暂无交易数据"] };
+    }
+
+    // 1) FDV 市值空间（越低空间越大）
+    var fdv = dexInfo.fdv || 0;
+    if (fdv > 0) {
+      if (fdv < 100000)        { score += 2; signals.push("FDV < $100K，上涨空间极大"); }
+      else if (fdv < 500000)   { score += 1; signals.push("FDV < $500K，空间较大"); }
+      else if (fdv <= 5000000) { signals.push("FDV $" + Math.round(fdv / 1000) + "K，市值适中"); }
+      else if (fdv <= 50000000){ score -= 1; signals.push("FDV > $5M，上涨空间有限"); }
+      else                     { score -= 2; signals.push("FDV > $50M，大盘币涨幅受限"); }
+    }
+
+    // 2) 交易量/流动性比（活跃度）
+    var vol = dexInfo.volume24h || 0;
+    var liq = dexInfo.liquidityUsd || 0;
+    if (liq > 0 && vol > 0) {
+      var ratio = vol / liq;
+      if (ratio > 5)        { score += 2; signals.push("24h交易量/流动性比 > 5，非常活跃"); }
+      else if (ratio > 2)   { score += 1; signals.push("交易活跃，量能充足"); }
+      else if (ratio > 0.5) { signals.push("24h成交量 $" + Math.round(vol).toLocaleString() + "，交易正常"); }
+      else if (ratio < 0.1) { score -= 1; signals.push("交易量偏低，关注度不足"); }
+      else                  { signals.push("24h成交量 $" + Math.round(vol).toLocaleString()); }
+    } else if (liq > 0 && vol === 0) {
+      score -= 1;
+      signals.push("24h 无交易量");
+    }
+
+    // 3) 近 1h 交易量（短时热度）
+    var vol1h = dexInfo.volume1h || 0;
+    if (vol1h > 50000)       { score += 1; signals.push("近1小时交易量 > $50K，正在放量"); }
+    else if (vol1h > 10000)  { score += 1; signals.push("近1小时有交易热度"); }
+
+    // 4) 买卖比（买入力量）
+    var txns = dexInfo.txns24h;
+    if (txns) {
+      var buys = txns.buys || 0;
+      var sells = txns.sells || 0;
+      var total = buys + sells;
+      if (total > 0) {
+        var buyRatio = buys / total;
+        if (buyRatio > 0.7)       { score += 2; signals.push("买入占比 " + Math.round(buyRatio * 100) + "%，买方强势"); }
+        else if (buyRatio > 0.55) { score += 1; signals.push("买入 " + Math.round(buyRatio * 100) + "% > 卖出，偏多"); }
+        else if (buyRatio >= 0.3) { signals.push("买入 " + Math.round(buyRatio * 100) + "% / 卖出 " + Math.round((1 - buyRatio) * 100) + "%，买卖均衡"); }
+        else                      { score -= 2; signals.push("卖出占比 " + Math.round((1 - buyRatio) * 100) + "%，抛压严重"); }
+      }
+    }
+
+    // 5) Holder 增长（持有人数多说明有人关注）
+    if (holders && holders.totalHolders > 100)  { score += 1; signals.push("持有者 " + holders.totalHolders + " 人，有一定基础"); }
+    if (holders && holders.totalHolders > 500)  { score += 1; signals.push("持有者超过 500 人，社区基础好"); }
+
+    // 6) 价格走势
+    var priceChg = dexInfo.priceChange24h || 0;
+    if (priceChg > 50)       { score += 1; signals.push("24h 涨幅 " + Math.round(priceChg) + "%"); }
+    else if (priceChg < -50) { score -= 1; signals.push("24h 跌幅 " + Math.round(Math.abs(priceChg)) + "%"); }
+
+    score = Math.max(1, Math.min(10, score));
+
+    // 没信号时给默认说明
+    if (signals.length === 0) {
+      if (score >= 7)      { signals.push("多个指标向好，有上涨潜力"); }
+      else if (score >= 5) { signals.push("数据平稳，无明显爆发信号"); }
+      else                 { signals.push("多项指标偏弱，需谨慎"); }
+    }
+
+    return {
+      score: score,
+      label: "涨幅潜力",
+      emoji: score >= 7 ? "🟩" : score >= 4 ? "🟨" : "🟥",
+      detail: signals.slice(0, 3).join("；"),
+      signals: signals.slice(0, 5),
     };
   }
 
