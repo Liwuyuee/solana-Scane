@@ -156,7 +156,35 @@ class Notifier {
       msg += "\n\n";
     }
 
-    msg += "---\n*仅供参考，非投资建议*";
+    // ─── 交易建议 ─────────────────────────────────
+    var total = (ev && ev.total) || 0;
+    if (total >= 30) {
+      msg += "**💡 交易参考**\n";
+      msg += "- 建议仓位: 轻仓（总资金 1-3%）\n";
+      msg += "- 买入方式: 分 2-3 笔，等价格稳定再补\n";
+      if (report && report.mintAuthority) {
+        msg += "- 止损: -20% 无条件止损\n";
+      } else {
+        msg += "- 止损: -30% 止损，或流动性撤池立即卖\n";
+      }
+      msg += "- 止盈: +50% 出本金，+100% 出利润\n";
+      msg += "- 卖出条件: 监控到部署者卖出立即清仓\n";
+      msg += "\n";
+    }
+
+    // 市场信息
+    if (token.dexInfo) {
+      var di = token.dexInfo;
+      msg += "**📈 市场数据**\n";
+      if (di.dexName) msg += "- DEX: " + di.dexName + "\n";
+      if (di.liquidityUsd) msg += "- 流动性: $" + Math.round(di.liquidityUsd).toLocaleString() + "\n";
+      if (di.fdv) msg += "- FDV: $" + Math.round(di.fdv).toLocaleString() + "\n";
+      if (di.priceUsd) msg += "- 价格: $" + Number(di.priceUsd).toFixed(8) + "\n";
+      if (di.url) msg += "- [Chart](" + di.url + ")\n";
+      msg += "\n";
+    }
+
+    msg += "---\n*本评分仅供参考，非投资建议。土狗有归零风险，请自行判断。*";
     return msg;
   }
 }

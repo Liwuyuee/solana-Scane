@@ -1,98 +1,93 @@
 /**
  * Solana 新代币监控
  *
- * 主数据源: WebSocket 订阅 Pump.fun 程序日志（实时）
+ * 主数据源: HTTP 轮询 Pump.fun 程序最新签名（每 5 秒）
  * 兜底:     DexScreener token-boosts API（每 30 秒）
  *
+ * WebSocket 被公共 RPC 限流（429），改用 HTTP 轮询更稳定。
  * 检测到新交易 → getTransaction 解析 → 对比 pre/postTokenBalances 找到新 Mint
  */
 
-const WebSocket = require("ws");
-const { HttpsProxyAgent } = require("https-proxy-agent");
-
 const PUMPFUN = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
-const WS_URL = "wss://api.mainnet-beta.solana.com";
 const RPC_URL = "https://api.mainnet-beta.solana.com";
+const POLL_INTERVAL = 5000; // 5 秒
 
 class Monitor {
   constructor() {
     this.seen = new Set();       // 已发现的 mint
     this.seenSigs = new Set();   // 已处理过的签名
-    this.ws = null;
+    this.lastSig = null;         // 上次处理的签名（用于增量）
     this.onNewToken = null;      // 外部注册的回调: (token) => {}
+
+    // 启动 HTTP 轮询
+    this.#startPumpfunPolling();
 
     // DexScreener 兜底
     this.#startDexFallback();
   }
-
-  // ─── 公开方法 ───────────────────────────────────────
 
   /** 注册新代币回调 */
   setNewTokenCallback(fn) {
     this.onNewToken = fn;
   }
 
-  /** 启动 WebSocket 监听 */
-  start() {
-    this.#connectWS();
+  // ─── HTTP 轮询 Pump.fun 程序签名 ─────────────────
+
+  #startPumpfunPolling() {
+    var poll = () => {
+      this.#pollSignatures().catch((err) => {
+        console.warn("  轮询失败:", err.message);
+      });
+    };
+    poll();
+    setInterval(poll, POLL_INTERVAL);
   }
 
-  // ─── WebSocket ──────────────────────────────────────
-
-  #connectWS() {
-    const proxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || "";
-    const agent = proxy ? new HttpsProxyAgent(proxy) : undefined;
-
-    this.ws = new WebSocket(WS_URL, { agent, handshakeTimeout: 15000 });
-
-    this.ws.on("open", () => {
-      console.log("🔌 WebSocket 已连接");
-      // 订阅 Pump.fun 程序日志
-      this.ws.send(JSON.stringify({
+  async #pollSignatures() {
+    // 取最近 10 条签名
+    var res = await fetch(RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         jsonrpc: "2.0", id: 1,
-        method: "logsSubscribe",
-        params: [{ mentions: [PUMPFUN] }, { commitment: "processed" }],
-      }));
+        method: "getSignaturesForAddress",
+        params: [PUMPFUN, { limit: 10 }],
+      }),
     });
+    if (!res.ok) return;
+    var data = await res.json();
+    var sigs = data.result || [];
+    if (sigs.length === 0) return;
 
-    this.ws.on("message", (raw) => {
-      try {
-        const msg = JSON.parse(raw.toString());
-        // 订阅确认
-        if (msg.id === 1 && msg.result) return;
-        // 日志通知
-        const val = msg.params?.result?.value;
-        if (val?.signature) this.#onLog(val);
-      } catch {}
-    });
+    // 从最新到最旧处理，记录最新的作为断点
+    var newestSig = sigs[0].signature;
 
-    this.ws.on("close", (code) => {
-      console.log(`🔌 WebSocket 断开 (${code}), 3 秒后重连...`);
-      setTimeout(() => this.#connectWS(), 3000);
-    });
+    // 跳过已经见过的
+    var newSigs = [];
+    for (var i = 0; i < sigs.length; i++) {
+      var s = sigs[i].signature;
+      if (!this.seenSigs.has(s)) {
+        this.seenSigs.add(s);
+        newSigs.push(s);
+      }
+    }
 
-    this.ws.on("error", (err) => {
-      console.error(`🔌 WebSocket 错误: ${err.message}`);
-    });
-  }
-
-  /** 收到链上日志 → 解析交易 */
-  async #onLog(log) {
-    const sig = log.signature;
-    if (this.seenSigs.has(sig)) return;
-    this.seenSigs.add(sig);
-
-    console.log(`📡 Pump.fun 新交易: ${sig.slice(0, 20)}...`);
-    // 等 1.5 秒让交易最终确认
-    await new Promise((r) => setTimeout(r, 1500));
-    await this.#parseTx(sig);
+    // 处理新签名（只处理最新的 3 条，避免 API 限速）
+    var toProcess = newSigs.slice(0, 3);
+    for (var i = 0; i < toProcess.length; i++) {
+      await this.#parseTx(toProcess[i]);
+      // 限速：每条间隔 500ms
+      if (i < toProcess.length - 1) {
+        await new Promise(function(r) { setTimeout(r, 500); });
+      }
+    }
   }
 
   /** 解析交易，提取新代币 */
   async #parseTx(sig) {
-    let tx;
+    var tx;
     try {
-      const res = await fetch(RPC_URL, {
+      var res = await fetch(RPC_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -102,72 +97,90 @@ class Monitor {
       });
       tx = (await res.json()).result;
     } catch (err) {
-      console.warn(`  交易解析失败: ${err.message}`);
       return;
     }
 
-    if (!tx?.meta) return;
+    if (!tx || !tx.meta) return;
 
     // 1) 检查是否为创建操作
-    const logs = tx.meta.logMessages || [];
-    const isCreate = logs.some(
-      (l) => l.includes("Create") || l.includes("initialize") || l.includes("Instruction: 0")
-    );
+    var logs = tx.meta.logMessages || [];
+    var isCreate = logs.some(function(l) {
+      return l.indexOf("Create") >= 0 || l.indexOf("initialize") >= 0 || l.indexOf("Instruction: 0") >= 0;
+    });
     if (!isCreate) return;
 
     // 2) 从 token balances 找新 mint
-    const pre = tx.meta.preTokenBalances || [];
-    const post = tx.meta.postTokenBalances || [];
-    const preMints = new Set((pre || []).map((b) => b.mint));
+    var pre = tx.meta.preTokenBalances || [];
+    var post = tx.meta.postTokenBalances || [];
+    var preMints = new Set((pre || []).map(function(b) { return b.mint; }));
 
-    const newMints = [];
-    for (const b of post) {
+    var newMints = [];
+    for (var i = 0; i < post.length; i++) {
+      var b = post[i];
       if (b.mint && !preMints.has(b.mint)) newMints.push(b.mint);
     }
 
-    for (const mint of newMints) {
+    for (var i = 0; i < newMints.length; i++) {
+      var mint = newMints[i];
       if (this.seen.has(mint)) continue;
       this.seen.add(mint);
 
       // 部署者 = fee payer
-      const creator = tx.transaction?.message?.accountKeys?.[0]?.pubkey || "";
+      var creator = (tx.transaction && tx.transaction.message && tx.transaction.message.accountKeys)
+        ? tx.transaction.message.accountKeys[0].pubkey : "";
 
-      console.log(`🎯 新代币: ${mint} (部署者: ${creator.slice(0, 8)}...)`);
+      console.log("🎯 新代币: " + mint.slice(0, 10) + "... (部署者: " + creator.slice(0, 8) + "...)");
 
       // 补全元信息
-      const token = await this.#enrich(mint, creator, sig);
+      var token = await this.#enrich(mint, creator, sig);
       if (this.onNewToken) this.onNewToken(token);
     }
   }
 
   // ─── 信息补全 ───────────────────────────────────────
 
-  /** 查 DexScreener 拿 name/symbol */
+  /** 查 DexScreener 拿 name/symbol + 交易对信息 */
   async #enrich(mint, creator, sig) {
-    const token = {
-      mint,
+    var token = {
+      mint: mint,
       name: mint.slice(0, 8),
       symbol: "?",
-      creator,
+      creator: creator,
       createTx: sig,
-      source: "websocket",
+      source: "onchain",
       description: "",
       socials: { twitter: "", telegram: "", website: "" },
+      dexInfo: null,   // 交易对信息
     };
 
     try {
-      const res = await fetch(
-        `https://api.dexscreener.com/latest/dex/search/?q=${mint}`
-      );
+      var res = await fetch("https://api.dexscreener.com/latest/dex/search/?q=" + mint);
       if (res.ok) {
-        const data = await res.json();
-        const pair = data.pairs?.[0];
-        if (pair?.baseToken) {
-          token.name = pair.baseToken.name || token.name;
-          token.symbol = pair.baseToken.symbol || token.symbol;
+        var data = await res.json();
+        var pairs = data.pairs || [];
+
+        // 找 Solana 链的交易对
+        for (var i = 0; i < pairs.length; i++) {
+          var p = pairs[i];
+          if (p.chainId === "solana") {
+            token.name = p.baseToken.name || token.name;
+            token.symbol = p.baseToken.symbol || token.symbol;
+
+            // 保存交易对信息
+            token.dexInfo = {
+              dexName: p.dexId || "",
+              pairAddress: p.pairAddress || "",
+              pairCreatedAt: p.pairCreatedAt || 0,
+              liquidityUsd: p.liquidity && p.liquidity.usd || 0,
+              fdv: p.fdv || 0,
+              priceUsd: p.priceUsd || 0,
+              url: p.url || "",
+            };
+            break;
+          }
         }
       }
-    } catch {}
+    } catch (e) {}
 
     return token;
   }
@@ -177,18 +190,20 @@ class Monitor {
   #startDexFallback() {
     setInterval(async () => {
       try {
-        const res = await fetch("https://api.dexscreener.com/token-boosts/latest/v1");
+        var res = await fetch("https://api.dexscreener.com/token-boosts/latest/v1");
         if (!res.ok) return;
-        const data = await res.json();
+        var data = await res.json();
         if (!Array.isArray(data)) return;
 
-        for (const b of data) {
-          const addr = b.tokenAddress;
+        for (var i = 0; i < data.length; i++) {
+          var b = data[i];
+          if (b.chainId !== "solana") continue;
+          var addr = b.tokenAddress;
           if (!addr || this.seen.has(addr)) continue;
           this.seen.add(addr);
 
-          console.log(`📌 DexScreener 发现: ${addr.slice(0, 10)}...`);
-          const token = {
+          console.log("📌 DexScreener 发现: " + addr.slice(0, 10) + "...");
+          var token = {
             mint: addr,
             name: addr.slice(0, 8),
             symbol: "?",
@@ -199,31 +214,31 @@ class Monitor {
           };
 
           if (b.links) {
-            for (const link of b.links) {
-              const url = link.url || "";
+            for (var j = 0; j < b.links.length; j++) {
+              var link = b.links[j];
+              var url = link.url || "";
               if (link.type === "twitter") token.socials.twitter = url;
               else if (link.type === "telegram") token.socials.telegram = url;
+              else if (!link.type && url) token.socials.website = url;
             }
           }
 
           // 补全名称
           try {
-            const r = await fetch(
-              `https://api.dexscreener.com/latest/dex/search/?q=${addr}`
-            );
+            var r = await fetch("https://api.dexscreener.com/latest/dex/search/?q=" + addr);
             if (r.ok) {
-              const d = await r.json();
-              const p = d.pairs?.[0];
-              if (p?.baseToken) {
+              var d = await r.json();
+              var p = d.pairs && d.pairs[0];
+              if (p && p.baseToken) {
                 token.name = p.baseToken.name || token.name;
                 token.symbol = p.baseToken.symbol || token.symbol;
               }
             }
-          } catch {}
+          } catch (e) {}
 
           if (this.onNewToken) this.onNewToken(token);
         }
-      } catch {}
+      } catch (e) {}
     }, 30000);
   }
 }

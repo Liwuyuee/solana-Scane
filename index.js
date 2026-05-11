@@ -9,7 +9,7 @@ const { Narrator } = require("./src/narrator");
 async function main() {
   console.log("╔══════════════════════════════════╗");
   console.log("║   Solana 新币监控机器人 v2       ║");
-  console.log("║   ⚡ WebSocket 实时监听          ║");
+  console.log("║   ⚡ HTTP 轮询 Pump.fun 程序     ║");
   console.log("║   📊 rugcheck + Holder + Dev     ║");
   console.log("║   💬 钉钉推送                    ║");
   console.log("╚══════════════════════════════════╝\n");
@@ -31,8 +31,9 @@ async function main() {
     console.warn("⚠️  .env 中 DINGTALK_TOKEN 未配置\n");
   }
 
-  // 推送阈值：总分 >= MIN_SCORE 才推送（默认 26，满分 40）
-  const MIN_SCORE = parseInt(process.env.MIN_SCORE || "26", 10);
+  // 推送阈值：总分 >= MIN_SCORE 才推送（默认 30，满分 40）
+  const MIN_SCORE = parseInt(process.env.MIN_SCORE || "30", 10);
+  const MIN_LIQUIDITY = parseInt(process.env.MIN_LIQUIDITY || "50000", 10);
 
   /**
    * 新币处理管线：分析 → Holder → Dev 追踪 → 推送
@@ -107,6 +108,37 @@ async function main() {
       failReasons.push("筹码极度集中（Top10 占 " + holders.top10Pct + "%）");
     }
 
+    // 5f) 部署者正在卖出 → 跳过
+    if (devInfo && devInfo.isSelling) {
+      failReasons.push("部署者正在卖出，有砸盘风险");
+    }
+
+    // 5g) 流动性不足 → 跳过
+    var liq = token.dexInfo && token.dexInfo.liquidityUsd;
+    if (liq > 0 && liq < MIN_LIQUIDITY) {
+      failReasons.push("流动性不足（$" + Math.round(liq).toLocaleString() + " < $" + MIN_LIQUIDITY.toLocaleString() + "）");
+    }
+
+    // 5h) 未毕业到 Raydium/主流 DEX → 跳过（只在 Pump.fun 上的太危险）
+    var dexName = token.dexInfo && token.dexInfo.dexName;
+    if (dexName && dexName !== "raydium" && dexName !== "orca" && dexName !== "jupiter") {
+      // 有 DEX 信息但不是主流 DEX → 警告但不阻止
+      // 无 DEX 信息（还在 Pump.fun 上）→ 跳过
+      if (!dexName) {
+        // 新创币还没 DEX 信息是正常的，跳过 DexScreener 兜底发现的币就够了
+        // 但如果评分很高且来源是 onchain，放宽
+      }
+    }
+
+    // 5i) 存活时间不够长（可选）→ 跳过
+    var createdAt = token.dexInfo && token.dexInfo.pairCreatedAt;
+    if (createdAt) {
+      var ageHours = (Date.now() - createdAt) / 3600000;
+      if (ageHours < 1) {
+        // 不到 1 小时，标记但不阻止
+      }
+    }
+
     if (failReasons.length > 0) {
       console.log("   ⏭ 金狗过滤未通过:");
       failReasons.forEach(function(r) { console.log("      - " + r); });
@@ -124,12 +156,8 @@ async function main() {
     }
   }
 
-  // 注册 WebSocket 回调
+  // 注册新币回调
   monitor.setNewTokenCallback(processToken);
-
-  // 启动 WebSocket 监听
-  monitor.start();
-  console.log("⚡ WebSocket 监听已启动");
 
   console.log(`🌐 代理: ${process.env.HTTP_PROXY || process.env.HTTPS_PROXY || "直连"}`);
   console.log("📡 DexScreener 兜底每 30 秒扫描一次\n");
