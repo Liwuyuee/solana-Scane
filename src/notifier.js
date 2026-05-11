@@ -65,7 +65,12 @@ class Notifier {
     msg += "💬 " + summary + "\n\n";
 
     // ─── 项目信息 ──────────────────────────────────
-    msg += "**📛 项目名: " + name + " ✓ 已验证**\n";
+    msg += "**📛 项目名: " + name + " ✓ 已验证**";
+    // Smart money badge
+    if (token.smartCount && token.smartCount > 0) {
+      msg += " 🧠 聪明钱 x" + token.smartCount;
+    }
+    msg += "\n";
     msg += "  · [Solscan](https://solscan.io/token/" + mint + ") · [创建记录](https://solscan.io/tx/" + (token.createTx || "") + ")\n\n";
 
     // ─── 配对代币 ──────────────────────────────────

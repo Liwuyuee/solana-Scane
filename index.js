@@ -5,6 +5,7 @@ const { Analyzer } = require("./src/analyzer");
 const { Notifier } = require("./src/notifier");
 const { DevTracker } = require("./src/devTracker");
 const { Narrator } = require("./src/narrator");
+const { SmartMoneyMonitor } = require("./src/smartMoney");
 
 async function main() {
   console.log("╔══════════════════════════════════╗");
@@ -30,6 +31,15 @@ async function main() {
   if (!process.env.DINGTALK_TOKEN) {
     console.warn("⚠️  .env 中 DINGTALK_TOKEN 未配置\n");
   }
+
+  // 聪明钱监控
+  const smartMoney = new SmartMoneyMonitor(monitor.seen);
+  smartMoney.onSmartBuy(function(token) {
+    // Smart money found a new token, process it through the same pipeline
+    processToken(token);
+  });
+  smartMoney.start();
+  console.log("🧠 聪明钱钱包: " + smartMoney.wallets.length + " 个");
 
   // 推送阈值：总分 >= MIN_SCORE 才推送（默认 30，满分 40）
   const MIN_SCORE = parseInt(process.env.MIN_SCORE || "30", 10);
