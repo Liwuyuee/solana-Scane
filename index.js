@@ -77,11 +77,43 @@ async function main() {
       if (aiNarrative.launchDetail) evalResult.launchQ.detail = aiNarrative.launchDetail;
     }
 
-    // 5) 按阈值过滤，只推高评分
+    // 5) 多层金狗过滤 ──────────────────────────────
+    var failReasons = [];
+
+    // 5a) 总分阈值
     if (evalResult.total < MIN_SCORE) {
-      console.log(`   ⏭ 低于阈值 ${MIN_SCORE}/40，跳过推送`);
+      failReasons.push("总分 " + evalResult.total + "/40 低于阈值 " + MIN_SCORE);
+    }
+
+    // 5b) Honeypot 高风险 → 跳过（避免貔貅）
+    var hp = evalResult.honeypot;
+    if (hp && hp.risk === "high") {
+      failReasons.push("Honeypot 高风险，可能无法卖出");
+    }
+
+    // 5c) Mint 权限未撤销 → 跳过（能增发就是定时炸弹）
+    if (report && report.mintAuthority) {
+      failReasons.push("Mint 权限未撤销，团队可无限增发");
+    }
+
+    // 5d) 开发者有 rug 历史 → 跳过
+    if (devInfo && devInfo.ruggedCount > 0) {
+      failReasons.push("部署者有 Rug 历史记录");
+    }
+
+    // 5e) Holder 极度集中（>90%）→ 跳过
+    var holders = report && report.holders;
+    if (holders && holders.top10Pct > 90) {
+      failReasons.push("筹码极度集中（Top10 占 " + holders.top10Pct + "%）");
+    }
+
+    if (failReasons.length > 0) {
+      console.log("   ⏭ 金狗过滤未通过:");
+      failReasons.forEach(function(r) { console.log("      - " + r); });
       return;
     }
+
+    console.log("   🐕 金狗检测通过! 推送中...");
 
     // 6) 推送钉钉
     try {
