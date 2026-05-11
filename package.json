@@ -1,0 +1,21 @@
+{
+  "name": "solana-monitor",
+  "version": "1.0.0",
+  "description": "Solana 新币监控 + 企业微信推送",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --use-env-proxy index.js",
+    "dev": "node --use-env-proxy --watch index.js"
+  },
+  "keywords": [
+    "solana",
+    "pumpfun",
+    "wecom"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}
