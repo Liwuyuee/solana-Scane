@@ -23,6 +23,9 @@ async function main() {
     console.warn("⚠️  .env 中 DINGTALK_TOKEN 未配置\n");
   }
 
+  // 推送阈值：总分 >= MIN_SCORE 才推送（默认 26，满分 40）
+  const MIN_SCORE = parseInt(process.env.MIN_SCORE || "26", 10);
+
   /**
    * 新币处理管线：分析 → Holder → Dev 追踪 → 推送
    */
@@ -35,22 +38,31 @@ async function main() {
     const report = await analyzer.getReport(token.mint);
     const s = report?.safeScore ?? 0;
     console.log(`   安全分: ${s}/100`);
-
-    // Holder 分析结果
     if (report?.holders?.totalHolders) {
       console.log(`   Holder: ${report.holders.totalHolders}个, Top10: ${report.holders.top10Pct}%`);
     }
 
     // 2) 开发者追踪
+    let devInfo = null;
     if (token.creator) {
-      const devInfo = await devTracker.record(token.creator, token.mint);
+      devInfo = await devTracker.record(token.creator, token.mint);
       token.devInfo = devInfo;
       console.log(`   部署者: ${devInfo.risk} (${devInfo.tokensCreated}个代币)`);
     }
 
-    // 3) 推送企业微信
+    // 3) 四项评分 + 叙事生成
+    const evalResult = analyzer.evaluate(report, devInfo);
+    console.log(`   总分: ${evalResult.total}/40 · ${evalResult.action}`);
+
+    // 4) 按阈值过滤，只推高评分
+    if (evalResult.total < MIN_SCORE) {
+      console.log(`   ⏭ 低于阈值 ${MIN_SCORE}/40，跳过推送`);
+      return;
+    }
+
+    // 5) 推送钉钉
     try {
-      await notifier.push(token, report);
+      await notifier.push(token, report, evalResult);
       console.log(`   ✅ 已推送`);
     } catch (e) {
       console.error(`   ❌ 推送失败: ${e.message}`);

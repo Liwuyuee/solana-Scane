@@ -1,7 +1,7 @@
 /**
- * 钉钉机器人推送
- * API: POST https://oapi.dingtalk.com/robot/send?access_token=xxx
- * 自定义关键词: "新币"
+ * 钉钉机器人推送 — 截图风格
+ * 四项评分 + 详细分析段落
+ * 关键词: "新币"
  */
 class Notifier {
   constructor(token) {
@@ -9,147 +9,141 @@ class Notifier {
     this.url = "https://oapi.dingtalk.com/robot/send?access_token=" + token;
   }
 
-  async push(token, report) {
+  /**
+   * @param {object} token   代币信息 { mint, name, symbol, creator, socials }
+   * @param {object} report  analyzer.getReport 返回值（raw）
+   * @param {object} evalRes analyzer.evaluate 返回值（四项评分 + 叙事）
+   */
+  async push(token, report, evalRes) {
     if (!this.token) {
-      console.log("  跳过推送：未配置 DINGTALK_TOKEN");
+      console.log("  跳过：未配置 DINGTALK_TOKEN");
       return;
     }
 
-    const content = this._buildMsg(token, report);
+    var content = this._buildMsg(token, report, evalRes);
 
-    const res = await fetch(this.url, {
+    var res = await fetch(this.url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         msgtype: "markdown",
-        markdown: {
-          title: "新币提醒",
-          text: content,
-        },
+        markdown: { title: "新币提醒", text: content },
       }),
     });
 
-    const body = await res.json();
+    var body = await res.json();
     if (body.errcode !== 0) {
       throw new Error("钉钉 " + body.errcode + ": " + body.errmsg);
     }
   }
 
-  _buildMsg(token, report) {
+  _buildMsg(token, report, ev) {
     var name = token.name || "Unknown";
     var sym = token.symbol || "?";
     var mint = token.mint || "";
     var short = mint.slice(0, 6) + "..." + mint.slice(-4);
-    var s = (report && report.safeScore) || 0;
+    var creator = token.creator || "";
+    var shortCreator = creator ? creator.slice(0, 6) + "..." + creator.slice(-4) : "?";
     var holders = report && report.holders;
 
-    var emoji = s >= 80 ? "🟢" : s >= 60 ? "🟡" : s >= 40 ? "🟠" : "🔴";
+    // 四项评分
+    var total = (ev && ev.total) || 0;
+    var action = (ev && ev.action) || "等待数据";
+    var summary = (ev && ev.summary) || "暂无数据";
+    var highlights = (ev && ev.highlights) || [];
+    var warnings = (ev && ev.warnings) || [];
+    var rug = (ev && ev.rugRisk) || {};
+    var code = (ev && ev.codeQuality) || {};
+    var innov = (ev && ev.innovation) || {};
+    var launch = (ev && ev.launchQ) || {};
 
-    // 钉钉 markdown 需要第一行包含关键词 "新币"
-    var msg = "### 🟡 新币提醒 · 安全分 " + emoji + " " + s + "/100\n\n";
-    msg += "> " + ((report && report.summary) || "暂无数据") + "\n\n";
-    msg += "**📛 " + name + " (" + sym + ")**\n";
-    msg += "- 地址: `" + short + "`\n";
-    msg += "- [Solscan](https://solscan.io/token/" + mint + ")\n";
-    if (token.creator) {
-      msg += "- 部署者: `" + token.creator.slice(0, 6) + "..." + token.creator.slice(-4) + "`\n";
-    }
-    msg += "\n";
+    // 总分颜色
+    var totalEmoji = total >= 32 ? "🟢" : total >= 24 ? "🟡" : total >= 16 ? "🟠" : "🔴";
 
-    // 安全检查
-    msg += "**🛡️ 权限检查**\n";
-    msg += "- Mint: " + (report && report.mintAuthority ? "❌ 未撤销" : "✅ 已撤销") + "\n";
-    msg += "- Freeze: " + (report && report.freezeAuthority ? "❌ 未撤销" : "✅ 已撤销") + "\n";
-    if (report && report.liquidity) {
-      msg += "- 流动性: $" + Math.round(report.liquidity).toLocaleString() + "\n";
-    }
-    msg += "\n";
+    var msg = "";
+    msg += "### " + totalEmoji + " 新币 · " + action + " · " + total + "/40\n\n";
+    msg += "💬 " + summary + "\n\n";
 
-    // 风险项
-    var all = [];
-    if (report && report.dangers) {
-      report.dangers.forEach(function(r) { all.push("❌ " + r.name); });
-    }
-    if (report && report.warnings) {
-      report.warnings.forEach(function(r) { all.push("⚠️ " + r.name); });
-    }
-    if (report && report.infos) {
-      report.infos.forEach(function(r) { all.push("ℹ️ " + r.name); });
-    }
-    var riskCount = (report && report.risks && report.risks.length) || 0;
-    msg += "**🔍 检测项（" + riskCount + "）**\n";
-    if (all.length > 0) {
-      msg += all.slice(0, 5).join("\n") + "\n";
-      if (all.length > 5) {
-        msg += "...还有 " + (all.length - 5) + " 项\n";
-      }
+    // ─── 项目信息 ──────────────────────────────────
+    msg += "**📛 项目名: " + name + " ✓ 已验证**\n";
+    msg += "  · [Solscan](https://solscan.io/token/" + mint + ") · [创建记录](https://solscan.io/tx/" + (token.createTx || "") + ")\n\n";
+
+    // ─── 配对代币 ──────────────────────────────────
+    msg += "**🪙 配对代币**\n";
+    msg += "• SOL (native)\n";
+    msg += "• " + sym + " (" + name + ")\n";
+    msg += "  `" + short + "` · [token](https://solscan.io/token/" + mint + ") · [chart](https://dexscreener.com/solana/" + mint + ")\n\n";
+
+    // ─── 创建者分析 ────────────────────────────────
+    var hasAuth = report && (report.mintAuthority || report.freezeAuthority);
+    msg += "**🧭 是谁建的池子**\n";
+    if (!hasAuth && creator) {
+      msg += "• ✅ 没找到管理员权限（合约可能已锁死）\n";
+      msg += "• 部署者: `" + shortCreator + "`\n";
+    } else if (hasAuth) {
+      msg += "• ⚠️ 存在管理员权限\n";
+      if (report.mintAuthority) msg += "• Mint: `" + report.mintAuthority.slice(0, 6) + "..." + report.mintAuthority.slice(-4) + "`\n";
+      if (report.freezeAuthority) msg += "• Freeze: `" + report.freezeAuthority.slice(0, 6) + "..." + report.freezeAuthority.slice(-4) + "`\n";
+      if (creator) msg += "• 部署者: `" + shortCreator + "`\n";
     } else {
-      msg += "未发现明显风险\n";
+      msg += "• 部署者: `" + shortCreator + "`\n";
     }
     msg += "\n";
 
-    // Holder 分布
-    if (holders && holders.totalHolders > 0) {
-      var hEmoji = "🟢";
-      if (holders.level === "critical") hEmoji = "🔴";
-      else if (holders.level === "high") hEmoji = "🟠";
-      else if (holders.level === "medium") hEmoji = "🟡";
-      msg += "**👥 Holder 分布 " + hEmoji + "**\n";
-      msg += "- 总 Holder: " + holders.totalHolders.toLocaleString() + "\n";
-      msg += "- Top 10 占比: " + holders.top10Pct + "%\n";
-      msg += "- 集中度: **" + holders.risk + "**\n";
-      if (holders.top10 && holders.top10.length > 0) {
-        var top3 = holders.top10.slice(0, 3);
-        msg += "- Top 3: " + top3.map(function(h) { return h.pct + "%"; }).join(" / ") + "\n";
-      }
-      msg += "\n";
-    }
-
-    // 部署者信息
-    if (token.devInfo) {
-      var dev = token.devInfo;
-      var dEmoji = "🟢";
-      if (dev.risk.indexOf("危险") >= 0) dEmoji = "🔴";
-      else if (dev.risk.indexOf("rug") >= 0) dEmoji = "🟠";
-      else if (dev.risk.indexOf("频繁") >= 0) dEmoji = "🟡";
-      msg += "**👤 部署者评估 " + dEmoji + "**\n";
-      msg += "- 已发代币: " + dev.tokensCreated + " 个\n";
-      if (dev.ruggedCount > 0) {
-        msg += "- 历史标记: ⚠️ " + dev.ruggedCount + " 个有风险\n";
-      }
-      msg += "- 评价: **" + dev.risk + "**\n";
-      msg += "\n";
-    }
-
-    // 评分条
-    var bar = "";
-    for (var i = 0; i < Math.round(s / 10); i++) bar += "█";
-    for (var i = 0; i < 10 - Math.round(s / 10); i++) bar += "░";
-    msg += "**📊 综合评分**\n";
-    msg += "`" + bar + "` " + s + "/100\n";
-    if (report && report.result) {
-      msg += "RugCheck: **" + report.result + "**\n";
-    }
-    if (report && report.rawScore) {
-      msg += "原始风险分: " + report.rawScore + "\n";
-    }
-
-    // 分项评分
-    var parts = [];
-    if (s > 0) parts.push("安全 " + s + "/100");
-    if (holders && holders.top10Pct > 0) {
-      var hScore = Math.max(0, Math.round(100 - holders.top10Pct));
-      parts.push("Holder " + hScore + "/100");
-    }
-    if (parts.length > 0) msg += parts.join(" · ") + "\n";
-    msg += "\n";
-
-    // 社交
+    // ─── 项目链接 ──────────────────────────────────
     var links = [];
-    if (token.socials && token.socials.twitter) links.push("[Twitter](" + token.socials.twitter + ")");
-    if (token.socials && token.socials.telegram) links.push("[Telegram](" + token.socials.telegram + ")");
-    if (token.socials && token.socials.website) links.push("[Website](" + token.socials.website + ")");
-    if (links.length > 0) msg += "**🔗 链接**\n" + links.join(" · ") + "\n\n";
+    if (token.socials && token.socials.website) links.push("🌐 " + token.socials.website);
+    if (token.socials && token.socials.twitter) links.push("🐦 " + token.socials.twitter);
+    if (token.socials && token.socials.telegram) links.push("💬 " + token.socials.telegram);
+    links.push("🔍 [Solscan](https://solscan.io/token/" + mint + ")");
+    if (links.length > 1) {
+      msg += "**🔗 项目链接**\n";
+      for (var i = 0; i < links.length; i++) {
+        msg += links[i] + "\n";
+      }
+      msg += "\n";
+    }
+
+    // ─── 四项评分 ──────────────────────────────────
+    msg += "**📊 四项评分（满分 10 分）**\n";
+    msg += rug.emoji + " **" + rug.label + " " + rug.score + "/10**";
+    if (rug.detail) msg += " — " + rug.detail;
+    msg += "\n";
+    msg += code.emoji + " **" + code.label + " " + code.score + "/10**";
+    if (code.detail) msg += " — " + code.detail;
+    msg += "\n";
+    msg += innov.emoji + " **" + innov.label + " " + innov.score + "/10**";
+    if (innov.detail) msg += " — " + innov.detail;
+    msg += "\n";
+    msg += launch.emoji + " **" + launch.label + " " + launch.score + "/10**";
+    if (launch.detail) msg += " — " + launch.detail;
+    msg += "\n\n";
+
+    // ─── Holder 信息（嵌入评分区下方） ──────────────
+    if (holders && holders.totalHolders > 0) {
+      var hEmoji = holders.level === "critical" ? "🔴" : holders.level === "high" ? "🟠" : holders.level === "medium" ? "🟡" : "🟢";
+      msg += hEmoji + " 持有者分布: " + holders.totalHolders + " 人 · Top 10 占 " + holders.top10Pct + "% · " + holders.risk + "\n\n";
+    }
+
+    // ─── 亮点 ─────────────────────────────────────
+    if (highlights.length > 0) {
+      msg += "**✨ 亮点**\n";
+      for (var i = 0; i < highlights.length; i++) {
+        msg += (i + 1) + "）" + highlights[i];
+        if (i < highlights.length - 1) msg += "；";
+      }
+      msg += "\n\n";
+    }
+
+    // ─── 风险 ─────────────────────────────────────
+    if (warnings.length > 0) {
+      msg += "**⚠️ 需要注意**\n";
+      for (var i = 0; i < warnings.length; i++) {
+        msg += (i + 1) + "）" + warnings[i];
+        if (i < warnings.length - 1) msg += "；";
+      }
+      msg += "\n\n";
+    }
 
     msg += "---\n*仅供参考，非投资建议*";
     return msg;

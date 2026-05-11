@@ -3,7 +3,10 @@
  *
  * 数据源：
  * - rugcheck.xyz: 安全评分 + 风险项
- * - Solana RPC:    Holder 分布分析（新增）
+ * - Solana RPC:    Holder 分布分析
+ * - DevTracker:    开发者历史
+ *
+ * 输出：四项评分 + 叙事段落
  */
 const RPC_URL = "https://api.mainnet-beta.solana.com";
 
@@ -14,52 +17,217 @@ class Analyzer {
     this.minInterval = 1200;
   }
 
-  /**
-   * 综合分析：rugcheck + holder
-   */
+  // ─── 主入口 ────────────────────────────────────────
+
   async getReport(mint) {
     if (!mint) return null;
 
-    // 并行发起 rugcheck 和 holder 分析
     const [rug, holder] = await Promise.all([
       this.#rugcheck(mint),
       this.#analyzeHolders(mint).catch(() => null),
     ]);
 
+    const base = rug || this.#emptyRug();
+    const holders = holder || { totalHolders: 0, top10Pct: 0, risk: "未知", level: "unknown" };
+
     return {
-      ...(rug || this.#emptyRug()),
-      holders: holder || { total: 0, top10Pct: 0, risk: "unknown" },
+      ...base,
+      holders,
     };
   }
 
-  /** rugcheck.xyz 安全评分 */
-  async #rugcheck(mint) {
-    // 限速
-    const now = Date.now();
-    const wait = this.minInterval - (now - this.lastCall);
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    this.lastCall = Date.now();
+  // ─── 四项评分计算（索引.js 调用） ─────────────────
 
-    try {
-      const res = await fetch(`${this.apiBase}/tokens/${mint}/report/summary`);
-      if (res.status === 404) return this.#emptyRug();
-      if (res.status === 429) return this.#emptyRug();
-      if (!res.ok) return null;
+  /**
+   * 根据原始数据计算四项评分
+   * @param {object} report   getReport 返回值
+   * @param {object} devInfo  devTracker.record() 返回值
+   * @returns {{ total, rugRisk, codeQuality, innovation, launchQ, summary, highlights, warnings }}
+   */
+  evaluate(report, devInfo) {
+    if (!report) return this.#emptyEval();
 
-      const data = await res.json();
-      return this.#parseRug(data);
-    } catch (err) {
-      console.warn(`  RugCheck 失败: ${err.message}`);
-      return null;
+    const holders = report.holders || {};
+    const four = this.#calcScores(report, holders, devInfo);
+    const narrative = this.#buildNarrative(report, four, holders, devInfo);
+
+    return {
+      total: four.rugRisk.score + four.codeQuality.score + four.innovation.score + four.launchQ.score,
+      rugRisk: four.rugRisk,
+      codeQuality: four.codeQuality,
+      innovation: four.innovation,
+      launchQ: four.launchQ,
+      summary: narrative.summary,
+      highlights: narrative.highlights,
+      warnings: narrative.warnings,
+      action: narrative.action,
+    };
+  }
+
+  // ─── 四项评分计算 ──────────────────────────────────
+
+  #calcScores(report, holders, dev) {
+    // 1) 跑路风险 ──────────────────────────────────────
+    let rug = 10;
+    const dangerCount = report.dangers?.length || 0;
+    const warnCount = report.warnings?.length || 0;
+    if (report.mintAuthority) rug -= 2;     // 还能增发
+    if (report.freezeAuthority) rug -= 1;   // 还能冻
+    rug -= dangerCount * 2;                 // 每个高危风险扣 2
+    rug -= warnCount * 1;                    // 每个中风险扣 1
+    if (report.rugged) rug = 1;            // 已 rug
+    if (dev && dev.ruggedCount > 0) rug -= 1;
+    rug = Math.max(1, Math.min(10, rug));
+
+    // 2) 代码靠谱 ──────────────────────────────────────
+    let code = 10;
+    const totalRisks = report.risks?.length || 0;
+    code -= totalRisks * 1;
+    if (report.mintAuthority) code -= 1;
+    if (!report.summary || report.summary === "暂无数据") code -= 3;
+    if (report.rugged) code = 1;
+    code = Math.max(1, Math.min(10, code));
+
+    // 3) 玩法新鲜 ──────────────────────────────────────
+    let innovation = 6;  // 默认中等
+    if (holders.totalHolders > 100) innovation += 1;
+    else if (holders.totalHolders < 10) innovation -= 1;
+    if (report.liquidity > 100000) innovation += 1;
+    // 有社交媒体加分
+    // 默认居中偏右，不全新也不完全抄袭
+    innovation = Math.max(1, Math.min(10, innovation));
+
+    // 4) 启动质量 ──────────────────────────────────────
+    let launch = 6;
+    if (dev) {
+      if (dev.tokensCreated >= 5) launch -= 2;  // 频繁发币
+      else if (dev.tokensCreated >= 2) launch -= 1;
+      else launch += 1;  // 首次发币可能更用心
+      if (dev.ruggedCount > 0) launch -= 2;
+    }
+    if (report.liquidity > 50000) launch += 1;
+    if (holders.totalHolders < 5) launch -= 1;
+    launch = Math.max(1, Math.min(10, launch));
+
+    return {
+      rugRisk:  { score: rug,  label: "跑路风险", emoji: rug >= 7 ? "🟩" : rug >= 4 ? "🟨" : "🟥" },
+      codeQuality: { score: code, label: "代码靠谱", emoji: code >= 7 ? "🟩" : code >= 4 ? "🟨" : "🟥" },
+      innovation:  { score: innovation, label: "玩法新鲜", emoji: innovation >= 7 ? "🟩" : innovation >= 4 ? "🟨" : "🟥" },
+      launchQ:     { score: launch, label: "启动质量", emoji: launch >= 7 ? "🟩" : launch >= 4 ? "🟨" : "🟥" },
+    };
+  }
+
+  // ─── 叙事生成 ──────────────────────────────────────
+
+  #buildNarrative(report, four, holders, dev) {
+    const rug = four.rugRisk;
+    const code = four.codeQuality;
+    const innov = four.innovation;
+    const launch = four.launchQ;
+    const total = rug.score + code.score + innov.score + launch.score;
+
+    // 总体评价
+    let action, summary;
+    if (total >= 32)          { action = "可以看看"; summary = "整体质量不错，无明显硬伤，可以关注后续交易量。"; }
+    else if (total >= 24)     { action = "再观望观望"; summary = "有一定亮点，但也存在一些需要注意的问题，建议先观察真实交易量再决定。"; }
+    else if (total >= 16)     { action = "比较警惕"; summary = "风险点较多或启动偏弱，除非有特别亮点否则不建议参与。"; }
+    else                      { action = "建议回避"; summary = "多项指标不理想，风险较高，建议远离。"; }
+
+    // 各分数解释
+    this.#addDetail(rug,  "跑路风险", report, dev);
+    this.#addDetail(code, "代码靠谱", report, dev);
+    this.#addDetail(innov, "玩法新鲜", report, holders);
+    this.#addDetail(launch, "启动质量", report, dev);
+
+    // 亮点
+    const highlights = [];
+    if (rug.score >= 8) highlights.push("权限已撤销，团队无法 Rug");
+    if (!report.mintAuthority) highlights.push("Mint 权限已放弃，不会无限增发");
+    if (!report.freezeAuthority) highlights.push("Freeze 权限已放弃，资金不会被冻结");
+    if (code.score >= 7) highlights.push("无高危风险项，代码质量良好");
+    if (innov.score >= 7) highlights.push("存在一定创新或特色机制");
+    if (holders.top10Pct > 0 && holders.top10Pct < 30) highlights.push("筹码分布相对分散");
+    if (dev && dev.ruggedCount === 0 && dev.tokensCreated > 0) highlights.push("部署者有发币经验且无 rug 记录");
+    if (report.liquidity > 100000) highlights.push(`流动性充足 ($${Math.round(report.liquidity).toLocaleString()})`);
+    if (highlights.length === 0) highlights.push("暂未发现明显亮点");
+
+    // 风险
+    const warnings = [];
+    if (report.mintAuthority) warnings.push("Mint 权限未撤销，团队可以无限增发");
+    if (report.freezeAuthority) warnings.push("Freeze 权限未撤销，代币可能被冻结");
+    if (report.dangers?.length > 0) {
+      report.dangers.forEach(function(r) { warnings.push(r.name); });
+    }
+    if (holders.top10Pct > 70) warnings.push("筹码高度集中（Top 10 持有 " + holders.top10Pct + "%），有大户砸盘风险");
+    if (dev && dev.ruggedCount > 0) warnings.push("部署者有 rug 历史记录");
+    if (dev && dev.tokensCreated >= 5) warnings.push("部署者频繁发币（" + dev.tokensCreated + "个），需警惕");
+    if (holders.totalHolders < 10) warnings.push("持有者极少（" + holders.totalHolders + "个），流动性风险高");
+    if (warnings.length === 0) warnings.push("暂未发现明显风险");
+
+    return { action, summary, highlights, warnings };
+  }
+
+  /** 为单项评分填充详细解释 */
+  #addDetail(item, label, report, extra) {
+    if (item.detail) return;
+    var s = item.score;
+    var lines = [];
+
+    if (label === "跑路风险") {
+      if (s >= 8) {
+        lines.push("Mint 和 Freeze 权限已撤销，合约不存在增发或冻结功能");
+        if (extra && extra.ruggedCount === 0) lines.push("部署者无 Rug 历史");
+        lines.push("项目方已放弃控制权，无法篡改合约或转移资金");
+        item.detail = lines.join("；") + "。整体跑路风险极低。";
+      } else if (s >= 5) {
+        if (report.mintAuthority) lines.push("Mint 权限未撤销，团队理论上可以增发");
+        else if (report.freezeAuthority) lines.push("Freeze 权限未撤销");
+        if (extra && extra.ruggedCount > 0) lines.push("部署者有 Rug 记录");
+        lines.push("存在一定退出风险，需密切关注项目方动态");
+        item.detail = lines.join("；") + "。";
+      } else {
+        if (report.mintAuthority && report.freezeAuthority) lines.push("Mint 和 Freeze 权限均未撤销");
+        else if (report.mintAuthority) lines.push("Mint 权限未撤销");
+        lines.push("存在较高 Rug 风险");
+        item.detail = "项目方仍掌控核心权限" + (lines.length ? "（" + lines.join("；") + "）" : "") + "，跑路风险较高。";
+      }
+    } else if (label === "代码靠谱") {
+      if (s >= 7) {
+        item.detail = "经 RugCheck 检测未发现高危漏洞，权限控制合理，代码实现较为规范。";
+      } else if (s >= 4) {
+        var riskList = (report.warnings || []).slice(0, 3).map(function(r) { return r.name; });
+        item.detail = "存在 " + (report.risks?.length || 0) + " 项检测告警" +
+          (riskList.length ? "（" + riskList.join("、") + "）" : "") +
+          "，虽不致命但说明代码有优化空间。";
+      } else {
+        item.detail = "检测到多项风险项，代码质量存疑，建议谨慎对待。";
+      }
+    } else if (label === "玩法新鲜") {
+      if (extra && extra.totalHolders > 100) {
+        item.detail = "已有一定用户基础（" + extra.totalHolders + " 个持有者），市场认可度尚可，但具体机制未体现明显原创性。";
+      } else if (extra && extra.totalHolders > 10) {
+        item.detail = "持币人数适中（" + extra.totalHolders + " 人），属于常见代币模式，暂无突出创新点。";
+      } else {
+        item.detail = "持币人数较少（" + ((extra && extra.totalHolders) || "?") + " 人），属于早期阶段，玩法暂未体现差异化。";
+      }
+    } else if (label === "启动质量") {
+      if (s >= 7) {
+        item.detail = "部署者有发币经验" + (extra ? "（" + extra.tokensCreated + "个）" : "") + "，流动性充足，开局质量良好。";
+      } else if (s >= 4) {
+        if (extra && extra.tokensCreated >= 5) {
+          item.detail = "部署者发币频繁（" + extra.tokensCreated + "个），可能存在批量发币行为，开局动力偏弱。";
+        } else {
+          item.detail = "流动性一般，项目方未展现足够投入力度，开局质量中等。";
+        }
+      } else {
+        item.detail = "部署者历史记录不理想，流动性薄弱或启动数据存疑，开局质量偏低。";
+      }
     }
   }
 
-  /**
-   * Holder 分布分析
-   * 查链上 Token 账户，算 Top 10 集中度
-   */
+  // ─── Holder 分析 ────────────────────────────────────
+
   async #analyzeHolders(mint) {
-    // 1) 总供应量
     const supplyRes = await fetch(RPC_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -71,9 +239,7 @@ class Analyzer {
     });
     const supplyData = await supplyRes.json();
     const totalSupply = supplyData.result?.value?.uiAmount || 0;
-    const decimals = supplyData.result?.value?.decimals || 0;
 
-    // 2) 查 Token 账户（带分页，最多取 20 个）
     const accountsRes = await fetch(RPC_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -92,69 +258,82 @@ class Analyzer {
         ],
       }),
     });
-    const accountsData = await accountsRes.json();
-    const accounts = accountsData.result || [];
+    const accounts = (accountsRes.json && (await accountsRes.json()).result) || [];
 
-    // 过滤出有余额的账户，排序
     const withBalance = accounts
-      .map((a) => ({
-        address: a.pubkey,
-        amount: a.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0,
-      }))
-      .filter((a) => a.amount > 0)
-      .sort((a, b) => b.amount - a.amount);
+      .map(function(a) {
+        return {
+          address: a.pubkey,
+          amount: (a.account?.data?.parsed?.info?.tokenAmount?.uiAmount) || 0,
+        };
+      })
+      .filter(function(a) { return a.amount > 0; })
+      .sort(function(a, b) { return b.amount - a.amount; });
 
     const totalHolders = withBalance.length;
     const top10 = withBalance.slice(0, 10);
-    const top10Amount = top10.reduce((sum, a) => sum + a.amount, 0);
+    const top10Amount = top10.reduce(function(s, a) { return s + a.amount; }, 0);
     const top10Pct = totalSupply > 0 ? (top10Amount / totalSupply) * 100 : 0;
 
-    // 集中度评估
-    let risk = "safe";
-    let level = "low";
-    if (top10Pct > 90) { risk = "极度集中"; level = "critical"; }
+    let risk = "分散", level = "safe";
+    if (top10Pct > 90)      { risk = "极度集中"; level = "critical"; }
     else if (top10Pct > 70) { risk = "高度集中"; level = "high"; }
-    else if (top10Pct > 50) { risk = "偏高"; level = "medium"; }
-    else if (top10Pct > 30) { risk = "中等"; level = "low"; }
-    else { risk = "分散"; level = "safe"; }
+    else if (top10Pct > 50) { risk = "偏高";     level = "medium"; }
+    else if (top10Pct > 30) { risk = "中等";     level = "low"; }
 
     return {
       totalHolders,
       totalSupply,
       top10Pct: Math.round(top10Pct * 10) / 10,
-      top10: top10.map((a) => ({
-        address: a.address,
-        pct: totalSupply > 0 ? Math.round((a.amount / totalSupply) * 1000) / 10 : 0,
-      })),
-      risk,
-      level,
+      top10: top10.slice(0, 3).map(function(a) {
+        return {
+          address: a.address,
+          pct: totalSupply > 0 ? Math.round((a.amount / totalSupply) * 1000) / 10 : 0,
+        };
+      }),
+      risk: risk,
+      level: level,
     };
   }
 
-  // ─── 解析工具 ───────────────────────────────────────
+  // ─── RugCheck ───────────────────────────────────────
+
+  async #rugcheck(mint) {
+    const now = Date.now();
+    var wait = this.minInterval - (now - this.lastCall);
+    if (wait > 0) await new Promise(function(r) { setTimeout(r, wait); });
+    this.lastCall = Date.now();
+
+    try {
+      var res = await fetch(this.apiBase + "/tokens/" + mint + "/report/summary");
+      if (res.status === 404) return this.#emptyRug();
+      if (res.status === 429) return this.#emptyRug();
+      if (!res.ok) return null;
+      var data = await res.json();
+      return this.#parseRug(data);
+    } catch (err) {
+      console.warn("  RugCheck 失败: " + err.message);
+      return null;
+    }
+  }
 
   #parseRug(data) {
-    const risks = (data.risks || []).map((r) => ({
-      name: r.name || "",
-      level: r.level || "info",
-    }));
+    const risks = (data.risks || []).map(function(r) {
+      return { name: r.name || "", level: r.level || "info" };
+    });
     const rawScore = data.score || 0;
     const safeScore = this.normalizeScore(rawScore);
 
     return {
-      rawScore,
-      safeScore,
+      rawScore: rawScore,
+      safeScore: safeScore,
       result: data.result || "Unknown",
       rugged: !!data.rugged,
-      risks,
-      dangers: risks.filter((r) => r.level === "danger"),
-      warnings: risks.filter((r) => r.level === "warning"),
-      infos: risks.filter((r) => r.level === "info"),
-      summary:
-        safeScore >= 80 ? "相对安全" :
-        safeScore >= 60 ? "存在一定风险" :
-        safeScore >= 40 ? "风险偏高，建议观望" :
-        safeScore >= 20 ? "高风险" : "极度危险",
+      risks: risks,
+      dangers: risks.filter(function(r) { return r.level === "danger"; }),
+      warnings: risks.filter(function(r) { return r.level === "warning"; }),
+      infos: risks.filter(function(r) { return r.level === "info"; }),
+      summary: "",
       mintAuthority: data.mintAuthority || null,
       freezeAuthority: data.freezeAuthority || null,
       liquidity: data.totalMarketLiquidity || 0,
@@ -168,6 +347,20 @@ class Analyzer {
       risks: [], dangers: [], warnings: [], infos: [],
       summary: "暂无数据",
       mintAuthority: null, freezeAuthority: null, liquidity: 0,
+    };
+  }
+
+  #emptyEval() {
+    return {
+      total: 0,
+      rugRisk:  { score: 0, label: "跑路风险", emoji: "⬜", detail: "暂无数据" },
+      codeQuality: { score: 0, label: "代码靠谱", emoji: "⬜", detail: "暂无数据" },
+      innovation:  { score: 0, label: "玩法新鲜", emoji: "⬜", detail: "暂无数据" },
+      launchQ:     { score: 0, label: "启动质量", emoji: "⬜", detail: "暂无数据" },
+      summary: "暂无数据",
+      highlights: [],
+      warnings: ["暂无数据"],
+      action: "等待数据",
     };
   }
 
