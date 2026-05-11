@@ -49,7 +49,8 @@ class Analyzer {
 
     const holders = report.holders || {};
     const four = this.#calcScores(report, holders, devInfo);
-    const narrative = this.#buildNarrative(report, four, holders, devInfo);
+    const honeypot = this.#checkHoneypot(report);
+    const narrative = this.#buildNarrative(report, four, holders, devInfo, honeypot);
 
     return {
       total: four.rugRisk.score + four.codeQuality.score + four.innovation.score + four.launchQ.score,
@@ -57,6 +58,7 @@ class Analyzer {
       codeQuality: four.codeQuality,
       innovation: four.innovation,
       launchQ: four.launchQ,
+      honeypot: honeypot,
       summary: narrative.summary,
       highlights: narrative.highlights,
       warnings: narrative.warnings,
@@ -117,9 +119,60 @@ class Analyzer {
     };
   }
 
+  // ─── Honeypot 检测 ──────────────────────────────────
+
+  /**
+   * 扫描 rugcheck 风险项，识别 Honeypot 特征
+   * 包括：高额交易税、黑名单、转账限制等
+   */
+  #checkHoneypot(report) {
+    var reasons = [];
+    var risk = "low";
+
+    if (!report || !report.risks) {
+      return { risk: "unknown", reasons: ["暂无数据，无法检测"] };
+    }
+
+    // 定义 Honeypot 关键词
+    var honeypotKeywords = [
+      { keyword: "tax",       label: "交易税过高" },
+      { keyword: "fee",       label: "交易手续费异常" },
+      { keyword: "blacklist", label: "存在黑名单功能" },
+      { keyword: "freeze",    label: "存在冻结功能" },
+      { keyword: "transfer",  label: "转账受限" },
+      { keyword: "sell",      label: "卖出受限" },
+      { keyword: "burn",      label: "销毁权限可疑" },
+      { keyword: "reflection", label: "反射机制可能隐藏限制" },
+    ];
+
+    // 检查风险项名称和描述
+    for (var i = 0; i < report.risks.length; i++) {
+      var r = report.risks[i];
+      var text = (r.name + " " + (r.description || "")).toLowerCase();
+      for (var j = 0; j < honeypotKeywords.length; j++) {
+        if (text.indexOf(honeypotKeywords[j].keyword) >= 0) {
+          var msg = "Honeypot 特征: " + honeypotKeywords[j].label + "（" + r.name + "）";
+          if (reasons.indexOf(msg) < 0) reasons.push(msg);
+        }
+      }
+    }
+
+    // freeze 权限也是 Honeypot 特征
+    if (report.freezeAuthority) {
+      reasons.push("Honeypot 特征: Freeze 权限未撤销，团队可冻结账户");
+    }
+
+    // 判断风险等级
+    if (reasons.length >= 3) risk = "high";
+    else if (reasons.length >= 1) risk = "medium";
+    else risk = "low";
+
+    return { risk: risk, reasons: reasons };
+  }
+
   // ─── 叙事生成 ──────────────────────────────────────
 
-  #buildNarrative(report, four, holders, dev) {
+  #buildNarrative(report, four, holders, dev, honeypot) {
     const rug = four.rugRisk;
     const code = four.codeQuality;
     const innov = four.innovation;
@@ -151,6 +204,11 @@ class Analyzer {
     if (report.liquidity > 100000) highlights.push(`流动性充足 ($${Math.round(report.liquidity).toLocaleString()})`);
     if (highlights.length === 0) highlights.push("暂未发现明显亮点");
 
+    // Honeypot 安全 → 加亮点
+    if (honeypot && honeypot.risk === "low") {
+      highlights.push("未检测到 Honeypot 特征，可正常买卖");
+    }
+
     // 风险
     const warnings = [];
     if (report.mintAuthority) warnings.push("Mint 权限未撤销，团队可以无限增发");
@@ -162,6 +220,9 @@ class Analyzer {
     if (dev && dev.ruggedCount > 0) warnings.push("部署者有 rug 历史记录");
     if (dev && dev.tokensCreated >= 5) warnings.push("部署者频繁发币（" + dev.tokensCreated + "个），需警惕");
     if (holders.totalHolders < 10) warnings.push("持有者极少（" + holders.totalHolders + "个），流动性风险高");
+    if (honeypot && honeypot.reasons.length > 0) {
+      honeypot.reasons.forEach(function(r) { warnings.push(r); });
+    }
     if (warnings.length === 0) warnings.push("暂未发现明显风险");
 
     return { action, summary, highlights, warnings };

@@ -4,6 +4,7 @@ const { Monitor } = require("./src/monitor");
 const { Analyzer } = require("./src/analyzer");
 const { Notifier } = require("./src/notifier");
 const { DevTracker } = require("./src/devTracker");
+const { Narrator } = require("./src/narrator");
 
 async function main() {
   console.log("╔══════════════════════════════════╗");
@@ -18,6 +19,13 @@ async function main() {
   const analyzer = new Analyzer();
   const notifier = new Notifier(process.env.DINGTALK_TOKEN);
   const devTracker = new DevTracker();
+  const narrator = new Narrator();
+
+  if (narrator.enabled) {
+    console.log("🤖 AI 叙事: 已启用（Claude）");
+  } else {
+    console.log("🤖 AI 叙事: 未启用（使用模板）");
+  }
 
   if (!process.env.DINGTALK_TOKEN) {
     console.warn("⚠️  .env 中 DINGTALK_TOKEN 未配置\n");
@@ -54,13 +62,28 @@ async function main() {
     const evalResult = analyzer.evaluate(report, devInfo);
     console.log(`   总分: ${evalResult.total}/40 · ${evalResult.action}`);
 
-    // 4) 按阈值过滤，只推高评分
+    // 4) AI 叙事增强
+    const aiNarrative = await narrator.generate(token, report, evalResult, report?.holders, devInfo);
+    if (aiNarrative) {
+      console.log("   🤖 AI 叙事生成成功");
+      // 用 AI 内容覆盖模板
+      if (aiNarrative.summary) evalResult.summary = aiNarrative.summary;
+      if (aiNarrative.highlights && aiNarrative.highlights.length > 0) evalResult.highlights = aiNarrative.highlights;
+      if (aiNarrative.warnings && aiNarrative.warnings.length > 0) evalResult.warnings = aiNarrative.warnings;
+      if (aiNarrative.action) evalResult.action = aiNarrative.action;
+      if (aiNarrative.rugDetail) evalResult.rugRisk.detail = aiNarrative.rugDetail;
+      if (aiNarrative.codeDetail) evalResult.codeQuality.detail = aiNarrative.codeDetail;
+      if (aiNarrative.innovDetail) evalResult.innovation.detail = aiNarrative.innovDetail;
+      if (aiNarrative.launchDetail) evalResult.launchQ.detail = aiNarrative.launchDetail;
+    }
+
+    // 5) 按阈值过滤，只推高评分
     if (evalResult.total < MIN_SCORE) {
       console.log(`   ⏭ 低于阈值 ${MIN_SCORE}/40，跳过推送`);
       return;
     }
 
-    // 5) 推送钉钉
+    // 6) 推送钉钉
     try {
       await notifier.push(token, report, evalResult);
       console.log(`   ✅ 已推送`);

@@ -119,10 +119,21 @@ class Notifier {
     if (launch.detail) msg += " — " + launch.detail;
     msg += "\n\n";
 
-    // ─── Holder 信息（嵌入评分区下方） ──────────────
+    // ─── Holder 信息 ──────────────────────────────
     if (holders && holders.totalHolders > 0) {
       var hEmoji = holders.level === "critical" ? "🔴" : holders.level === "high" ? "🟠" : holders.level === "medium" ? "🟡" : "🟢";
       msg += hEmoji + " 持有者分布: " + holders.totalHolders + " 人 · Top 10 占 " + holders.top10Pct + "% · " + holders.risk + "\n\n";
+    }
+
+    // ─── Honeypot 检测 ────────────────────────────
+    var hp = ev && ev.honeypot;
+    if (hp && hp.risk !== "unknown") {
+      var hpEmoji = hp.risk === "low" ? "✅" : hp.risk === "medium" ? "⚠️" : "🚫";
+      msg += hpEmoji + " Honeypot 检测: **" + (hp.risk === "low" ? "安全，可正常买卖" : hp.risk === "medium" ? "存在可疑特征" : "高风险，可能无法卖出") + "**\n";
+      if (hp.reasons && hp.reasons.length > 0) {
+        msg += "  " + hp.reasons.join("\n  ") + "\n";
+      }
+      msg += "\n";
     }
 
     // ─── 亮点 ─────────────────────────────────────
