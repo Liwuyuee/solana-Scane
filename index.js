@@ -87,6 +87,9 @@ async function main() {
       console.log(`   涨幅潜力: ${evalResult.growth.score}/10 ${evalResult.growth.emoji}`);
     }
 
+    // 保存到数据库（防止重启后重复推送）
+    store.saveToken(token, evalResult, report?.holders);
+
     // 4) AI 叙事增强
     const aiNarrative = await narrator.generate(token, report, evalResult, report?.holders, devInfo);
     if (aiNarrative) {
