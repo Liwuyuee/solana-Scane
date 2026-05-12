@@ -16,8 +16,8 @@ const POLL_INTERVAL = 10000;
 const RAYDIUM_INTERVAL = 15000;
 
 class Monitor {
-  constructor() {
-    this.seen = new Set();       // 已发现的 mint
+  constructor(existingMints) {
+    this.seen = new Set(existingMints || []);  // 从数据库加载已扫 mint
     this.seenPumpSigs = new Set();
     this.seenRaydiumSigs = new Set();
     this.onNewToken = null;
@@ -302,8 +302,8 @@ class Monitor {
   // ─── DexScreener 兜底（每 30 秒） ────────────────────
 
   _startDexFallback() {
-    var poll = async () => {
-      setTimeout(poll, 30000);
+    var self = this;
+    async function poll() {
       try {
         var res = await fetch("https://api.dexscreener.com/token-boosts/latest/v1");
         if (!res.ok) return;
@@ -314,8 +314,10 @@ class Monitor {
           var b = data[i];
           if (b.chainId !== "solana") continue;
           var addr = b.tokenAddress;
-          if (!addr || this.seen.has(addr)) continue;
-          this.seen.add(addr);
+          if (!addr) continue;
+          if (!self.seen) return; // safety
+          if (self.seen.has(addr)) continue;
+          self.seen.add(addr);
 
           console.log("📌 DexScreener 发现: " + addr.slice(0, 10) + "...");
           var token = {
@@ -351,12 +353,13 @@ class Monitor {
             }
           } catch (e) {}
 
-          if (this.onNewToken) this.onNewToken(token);
+          if (self.onNewToken) self.onNewToken(token);
         }
       } catch (e) {
         if (e && e.message) console.warn("  DexScreener 失败:", e.message);
       }
-    };
+      setTimeout(poll, 30000);
+    }
     poll();
   }
 }

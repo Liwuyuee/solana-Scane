@@ -95,6 +95,12 @@ class Store {
     return this.db.prepare("SELECT * FROM tokens ORDER BY created_at DESC LIMIT ?").all(limit);
   }
 
+  /** 获取所有已扫过的 mint 地址，用于启动时加载避免重复推送 */
+  getExistingMints() {
+    var rows = this.db.prepare("SELECT mint FROM tokens").all();
+    return rows.map(function(r) { return r.mint; });
+  }
+
   /** 查某个代币 */
   getToken(mint) {
     return this.db.prepare("SELECT * FROM tokens WHERE mint = ?").get(mint);

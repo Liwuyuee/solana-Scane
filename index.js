@@ -11,6 +11,7 @@ const { Notifier } = require("./src/notifier");
 const { DevTracker } = require("./src/devTracker");
 const { Narrator } = require("./src/narrator");
 const { SmartMoneyMonitor } = require("./src/smartMoney");
+const { Store } = require("./src/store");
 
 async function main() {
   console.log("╔══════════════════════════════════╗");
@@ -21,7 +22,12 @@ async function main() {
   console.log("╚══════════════════════════════════╝\n");
 
   // 初始化各模块
-  const monitor = new Monitor();
+  const store = new Store();
+  const existingMints = store.getExistingMints();
+  const monitor = new Monitor(existingMints);
+  if (existingMints.length > 0) {
+    console.log("📦 从数据库加载 " + existingMints.length + " 个已扫过的代币，避免重复推送");
+  }
   const analyzer = new Analyzer();
   const notifier = new Notifier(process.env.DINGTALK_TOKEN);
   const devTracker = new DevTracker();
