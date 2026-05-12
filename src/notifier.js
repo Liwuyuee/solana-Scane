@@ -124,21 +124,6 @@ class Notifier {
     if (launch.detail) msg += " — " + launch.detail;
     msg += "\n";
 
-    // ─── 涨幅潜力 ─────────────────────────────────
-    var growth = ev && ev.growth;
-    if (growth && growth.score > 0) {
-      msg += growth.emoji + " **" + growth.label + " " + growth.score + "/10**";
-      if (growth.detail) msg += " — " + growth.detail;
-      msg += "\n";
-
-      // 信号明细
-      if (growth.signals && growth.signals.length > 0) {
-        for (var g = 0; g < growth.signals.length; g++) {
-          msg += "  · " + growth.signals[g] + "\n";
-        }
-      }
-    }
-    msg += "\n";
 
     // ─── Holder 信息 ──────────────────────────────
     if (holders && holders.totalHolders > 0) {
@@ -202,6 +187,23 @@ class Notifier {
       if (di.fdv) msg += "- FDV: $" + Math.round(di.fdv).toLocaleString() + "\n";
       if (di.priceUsd) msg += "- 价格: $" + Number(di.priceUsd).toFixed(8) + "\n";
       if (di.url) msg += "- [Chart](" + di.url + ")\n";
+      msg += "\n";
+    }
+
+    // ─── 涨幅星星（放在最后） ────────────────────
+    var growth = ev && ev.growth;
+    if (growth && growth.stars > 0) {
+      var stars = "";
+      for (var x = 0; x < 5; x++) {
+        stars += (x < growth.stars) ? "★" : "☆";
+      }
+      msg += "**🚀 涨幅潜力评估**\n";
+      msg += stars + " " + growth.stars + "/5\n";
+      if (growth.signals && growth.signals.length > 0) {
+        for (var s = 0; s < growth.signals.length; s++) {
+          msg += "· " + growth.signals[s] + "\n";
+        }
+      }
       msg += "\n";
     }
 
