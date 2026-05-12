@@ -1,29 +1,30 @@
 /**
  * Solana 新代币监控
  *
- * 主数据源: HTTP 轮询 Pump.fun 程序最新签名（每 5 秒）
- * 兜底:     DexScreener token-boosts API（每 30 秒）
- *
- * WebSocket 被公共 RPC 限流（429），改用 HTTP 轮询更稳定。
- * 检测到新交易 → getTransaction 解析 → 对比 pre/postTokenBalances 找到新 Mint
+ * 数据源:
+ * - Pump.fun: 土狗发射场（10 秒轮询）
+ * - Raydium:  主流 DEX，毕业币和直接发币（15 秒轮询）
+ * - DexScreener: 兜底扫描（30 秒）
  */
 
 const PUMPFUN = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+const RAYDIUM_AMM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
+const WSOL = "So11111111111111111111111111111111111111112";
+const RAYDIUM_CPMM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
 const RPC_URL = "https://api.mainnet-beta.solana.com";
-const POLL_INTERVAL = 5000; // 5 秒
+const POLL_INTERVAL = 10000;
+const RAYDIUM_INTERVAL = 15000;
 
 class Monitor {
   constructor() {
     this.seen = new Set();       // 已发现的 mint
-    this.seenSigs = new Set();   // 已处理过的签名
-    this.lastSig = null;         // 上次处理的签名（用于增量）
-    this.onNewToken = null;      // 外部注册的回调: (token) => {}
+    this.seenPumpSigs = new Set();
+    this.seenRaydiumSigs = new Set();
+    this.onNewToken = null;
 
-    // 启动 HTTP 轮询
     this.#startPumpfunPolling();
-
-    // DexScreener 兜底
-    this.#startDexFallback();
+    this.#startRaydiumPolling();
+    this._startDexFallback();
   }
 
   /** 注册新代币回调 */
@@ -34,13 +35,21 @@ class Monitor {
   // ─── HTTP 轮询 Pump.fun 程序签名 ─────────────────
 
   #startPumpfunPolling() {
+    var heartbeat = 0;
     var poll = () => {
-      this.#pollSignatures().catch((err) => {
-        console.warn("  轮询失败:", err.message);
-      });
+      this.#pollSignatures()
+        .catch((err) => {
+          console.warn("  轮询失败:", err.message);
+        })
+        .finally(() => {
+          heartbeat++;
+          if (heartbeat % 12 === 0) {
+            console.log("  💓 心跳检测 - 运行中 (" + new Date().toLocaleTimeString() + ")");
+          }
+          setTimeout(poll, POLL_INTERVAL);
+        });
     };
     poll();
-    setInterval(poll, POLL_INTERVAL);
   }
 
   async #pollSignatures() {
@@ -83,7 +92,107 @@ class Monitor {
     }
   }
 
-  /** 解析交易，提取新代币 */
+  // ─── HTTP 轮询 Raydium AMM 签名 ──────────────────
+
+  #startRaydiumPolling() {
+    var heartbeat = 0;
+    var poll = () => {
+      this.#pollRaydium()
+        .catch((err) => {
+          // silent
+        })
+        .finally(() => {
+          heartbeat++;
+          if (heartbeat % 12 === 0) {
+            console.log("  💓 心跳检测 - Raydium 扫描中 (" + new Date().toLocaleTimeString() + ")");
+          }
+          setTimeout(poll, RAYDIUM_INTERVAL);
+        });
+    };
+    poll();
+  }
+
+  async #pollRaydium() {
+    var res = await fetch(RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        method: "getSignaturesForAddress",
+        params: [RAYDIUM_AMM, { limit: 10 }],
+      }),
+    });
+    if (!res.ok) return;
+    var data = await res.json();
+    var sigs = data.result || [];
+    if (sigs.length === 0) return;
+
+    // Process new signatures
+    var toProcess = [];
+    for (var i = 0; i < sigs.length; i++) {
+      var s = sigs[i].signature;
+      if (!this.seenRaydiumSigs.has(s)) {
+        this.seenRaydiumSigs.add(s);
+        toProcess.push(s);
+      }
+    }
+
+    // Process up to 3 new txs
+    toProcess = toProcess.slice(0, 3);
+    for (var i = 0; i < toProcess.length; i++) {
+      await this.#parseRaydiumTx(toProcess[i]);
+      if (i < toProcess.length - 1) {
+        await new Promise(function(r) { setTimeout(r, 500); });
+      }
+    }
+  }
+
+  async #parseRaydiumTx(sig) {
+    var tx;
+    try {
+      var res = await fetch(RPC_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "getTransaction",
+          params: [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
+        }),
+      });
+      tx = (await res.json()).result;
+    } catch (e) {
+      return;
+    }
+    if (!tx || !tx.meta) return;
+
+    // Raydium 新池 = initialize2 指令
+    var logs = tx.meta.logMessages || [];
+    var isNewPool = logs.some(function(l) {
+      return l.indexOf("initialize2") >= 0 || l.indexOf("Initialize") >= 0;
+    });
+    if (!isNewPool) return;
+
+    // 从 postTokenBalances 提取新 mint，排除 WSOL
+    var pre = tx.meta.preTokenBalances || [];
+    var post = tx.meta.postTokenBalances || [];
+    var preMints = new Set((pre || []).map(function(b) { return b.mint; }));
+
+    for (var i = 0; i < post.length; i++) {
+      var b = post[i];
+      if (!b.mint || b.mint === WSOL) continue;
+      if (preMints.has(b.mint)) continue;
+      if (this.seen.has(b.mint)) continue;
+      this.seen.add(b.mint);
+
+      var creator = (tx.transaction && tx.transaction.message && tx.transaction.message.accountKeys)
+        ? tx.transaction.message.accountKeys[0].pubkey : "";
+
+      console.log("🎯 Raydium 新池: " + b.mint.slice(0, 10) + "...");
+      var token = await this.#enrich(b.mint, creator, sig);
+      if (this.onNewToken) this.onNewToken(token);
+    }
+  }
+
+  /** 解析 Pump.fun 交易，提取新代币 */
   async #parseTx(sig) {
     var tx;
     try {
@@ -192,8 +301,9 @@ class Monitor {
 
   // ─── DexScreener 兜底（每 30 秒） ────────────────────
 
-  #startDexFallback() {
-    setInterval(async () => {
+  _startDexFallback() {
+    var poll = async () => {
+      setTimeout(poll, 30000);
       try {
         var res = await fetch("https://api.dexscreener.com/token-boosts/latest/v1");
         if (!res.ok) return;
@@ -243,8 +353,11 @@ class Monitor {
 
           if (this.onNewToken) this.onNewToken(token);
         }
-      } catch (e) {}
-    }, 30000);
+      } catch (e) {
+        if (e && e.message) console.warn("  DexScreener 失败:", e.message);
+      }
+    };
+    poll();
   }
 }
 

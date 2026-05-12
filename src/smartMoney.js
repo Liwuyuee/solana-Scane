@@ -12,6 +12,7 @@ const PUMPFUN = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 // Known profitable wallets (source: public on-chain data)
 // These wallets have verified >$100K profit on Pump.fun
 const KNOWN_WALLETS = [
+  // Original verified wallets
   "3JPYL9xEPFjefV3tccrUwhLzME1mMq2dQSDeDebgzQi6",  // $1.35M+ profit, 229 tokens
   "CdFHmaj37EtjgRqvyt6vZqoA9tuMSvKLSmbgpuV6ejaP",  // $1.01M+ profit, 695 tokens
   "BECep66KrL7NbUNHq3qyPcMrUTokZbuTxXNCkkceM5w",
@@ -22,6 +23,11 @@ const KNOWN_WALLETS = [
   "7LKBxkQZgqffvM3XHgqL1GbbPJa8n3rq7EjFX84BziK",
   "4Cs5YHS7V3JRK5TJJGzjPXpBPbCN3sqKHZmS1ncf3THf",
   "4kU3vTvGWanKvNLUF4kMNyhmJqJN1VauyGjbFG9X3BGV",
+  // User-added wallets
+  "8FwnXqdCPjUppx7FfNqzAsQnqeWXEPeSZyMgMfGttaFV",  // added by user
+  "8Xnit4gf2R5cA3XE6KobuyWjiPfTptsJxN7rrAu8YbiW",  // added by user
+  "EvGpkcSBfhp5K9SNP48wVtfNXdKYRBiK3kvMkB66kU3Q",  // added by user
+  "4EH92iYK8wua8MyqNExVeiXy5VJUAweXqJPuTWqCvNB8",  // added by user
 ];
 
 class SmartMoneyMonitor {

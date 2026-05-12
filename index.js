@@ -1,5 +1,10 @@
 require("dotenv").config();
 
+// Prevent crash on unhandled promise rejections (RPC timeouts, network issues)
+process.on("unhandledRejection", function(err) {
+  console.warn("  ⚠️ 未捕获的异常（已忽略）:", (err && err.message) || err);
+});
+
 const { Monitor } = require("./src/monitor");
 const { Analyzer } = require("./src/analyzer");
 const { Notifier } = require("./src/notifier");
@@ -10,7 +15,7 @@ const { SmartMoneyMonitor } = require("./src/smartMoney");
 async function main() {
   console.log("╔══════════════════════════════════╗");
   console.log("║   Solana 新币监控机器人 v2       ║");
-  console.log("║   ⚡ HTTP 轮询 Pump.fun 程序     ║");
+  console.log("║   ⚡ Pump.fun + Raydium 双扫描    ║");
   console.log("║   📊 rugcheck + Holder + Dev     ║");
   console.log("║   💬 钉钉推送                    ║");
   console.log("╚══════════════════════════════════╝\n");
@@ -177,4 +182,17 @@ async function main() {
   console.log("等待新币...\n");
 }
 
-main();
+// Auto-restart on crash
+async function run() {
+  while (true) {
+    try {
+      await main();
+      break; // normal exit
+    } catch (err) {
+      console.error("\n💥 进程崩溃: " + (err && err.message));
+      console.log("🔄 5 秒后自动重启...");
+      await new Promise(function(r) { setTimeout(r, 5000); });
+    }
+  }
+}
+run();
