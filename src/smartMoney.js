@@ -28,6 +28,9 @@ const KNOWN_WALLETS = [
   "8Xnit4gf2R5cA3XE6KobuyWjiPfTptsJxN7rrAu8YbiW",  // added by user
   "EvGpkcSBfhp5K9SNP48wVtfNXdKYRBiK3kvMkB66kU3Q",  // added by user
   "4EH92iYK8wua8MyqNExVeiXy5VJUAweXqJPuTWqCvNB8",  // added by user
+  "ALKV2vKuYyazXSVWPao3KXFkEnhejdSs7Ti5qeZSKENH",  // added by user
+  "DDApL88zun3vGuhkxkUx6HmoXUyj37xs2NiwW5SMknHZ",  // added by user
+  "3kebnKw7cPdSkLRfiMEALyZJGZ4wdiSRvmoN4rD1yPzV",  // added by user
 ];
 
 class SmartMoneyMonitor {
