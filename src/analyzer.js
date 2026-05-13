@@ -49,7 +49,7 @@ class Analyzer {
 
     const holders = report.holders || {};
     const four = this.#calcScores(report, holders, devInfo);
-    const honeypot = this.#checkHoneypot(report);
+    const honeypot = this.#checkHoneypot(report, dexInfo);
     const growth = this.#calcGrowth(dexInfo, holders);
     const narrative = this.#buildNarrative(report, four, holders, devInfo, honeypot);
 
@@ -217,7 +217,7 @@ class Analyzer {
    * 扫描 rugcheck 风险项，识别 Honeypot 特征
    * 包括：高额交易税、黑名单、转账限制等
    */
-  #checkHoneypot(report) {
+  #checkHoneypot(report, dexInfo) {
     var reasons = [];
     var risk = "low";
 
@@ -252,6 +252,21 @@ class Analyzer {
     // freeze 权限也是 Honeypot 特征
     if (report.freezeAuthority) {
       reasons.push("Honeypot 特征: Freeze 权限未撤销，团队可冻结账户");
+    }
+
+    // DexScreener 买卖比检测：卖出占比极低 → 貔貅
+    if (dexInfo && dexInfo.txns24h) {
+      var tx = dexInfo.txns24h;
+      var total = (tx.buys || 0) + (tx.sells || 0);
+      if (total > 10) {
+        var sellRatio = (tx.sells || 0) / total;
+        if (sellRatio < 0.05) {
+          reasons.push("卖出占比仅 " + Math.round(sellRatio * 100) + "%，疑似貔貅（只买不卖）");
+        }
+        if (tx.buys > 0 && tx.sells === 0) {
+          reasons.push("24h 零笔卖出交易，极大概率是貔貅");
+        }
+      }
     }
 
     // 判断风险等级

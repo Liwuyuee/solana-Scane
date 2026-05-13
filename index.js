@@ -126,10 +126,13 @@ async function main() {
       failReasons.push("总分 " + evalResult.total + "/40 低于阈值 " + MIN_SCORE);
     }
 
-    // 5b) Honeypot 高风险 → 跳过（避免貔貅）
+    // 5b) Honeypot 检测 → 跳过（避免貔貅）
     var hp = evalResult.honeypot;
     if (hp && hp.risk === "high") {
       failReasons.push("Honeypot 高风险，可能无法卖出");
+    }
+    if (hp && hp.risk === "medium") {
+      failReasons.push("Honeypot 存在可疑特征（" + (hp.reasons[0] || "") + "）");
     }
 
     // 5c) Mint 权限未撤销 → 跳过（能增发就是定时炸弹）

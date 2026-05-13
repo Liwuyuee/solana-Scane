@@ -1,0 +1,17 @@
+◇ injected env (3) from .env // tip: ⌘ override existing { override: true }
+╔══════════════════════════════════╗
+║   Solana 新币监控机器人 v2       ║
+║   ⚡ Pump.fun + Raydium 双扫描    ║
+║   📊 rugcheck + Holder + Dev     ║
+║   💬 钉钉推送                    ║
+╚══════════════════════════════════╝
+
+📦 从数据库加载 204 个已扫过的代币，避免重复推送
+🤖 AI 叙事: 未启用（使用模板）
+🧠 聪明钱钱包: 17 个
+📈 动量异动扫描: 已启动 (FDV > $200K)
+🌐 代理: http://127.0.0.1:7897
+📡 DexScreener 兜底每 30 秒扫描一次
+
+等待新币...
+
