@@ -11,6 +11,7 @@ const { Notifier } = require("./src/notifier");
 const { DevTracker } = require("./src/devTracker");
 const { Narrator } = require("./src/narrator");
 const { SmartMoneyMonitor } = require("./src/smartMoney");
+const { MomentumScanner } = require("./src/momentum");
 const { Store } = require("./src/store");
 
 async function main() {
@@ -51,6 +52,14 @@ async function main() {
   });
   smartMoney.start();
   console.log("🧠 聪明钱钱包: " + smartMoney.wallets.length + " 个");
+
+  // 动量异动监控（FDV > $200K 的币检测放量异动）
+  const momentumScanner = new MomentumScanner(monitor.seen);
+  momentumScanner.setCallback(function(token) {
+    processToken(token);
+  });
+  momentumScanner.start();
+  console.log("📈 动量异动扫描: 已启动 (FDV > $200K)");
 
   // 推送阈值：总分 >= MIN_SCORE 才推送（默认 30，满分 40）
   const MIN_SCORE = parseInt(process.env.MIN_SCORE || "30", 10);
