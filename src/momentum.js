@@ -39,7 +39,9 @@ class MomentumScanner {
         var b = data[i];
         if (b.chainId !== "solana") continue;
         var addr = b.tokenAddress;
-        if (!addr || this.seenMomentum.has(addr)) continue;
+        if (!addr) continue;
+        if (this.seenMomentum.has(addr)) continue;
+        if (this.seen && this.seen.has(addr)) continue; // already scanned before
 
         // Get full pair data for FDV check
         var pair = await this._fetchPair(addr);
