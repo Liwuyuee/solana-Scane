@@ -58,10 +58,11 @@ class Notifier {
       msg += "  🧠 x" + token.smartCount;
     }
     msg += "\n\n";
-    msg += "`" + short + "`\n\n";
-    msg += "[Solscan](https://solscan.io/token/" + mint + ") | [Chart](https://dexscreener.com/solana/" + mint + ")";
+    msg += "> `" + mint + "`\n\n";
+    msg += "🪙 SOL / " + sym + "\n\n";
+    msg += "[Solscan](https://solscan.io/token/" + mint + ") · [Chart](https://dexscreener.com/solana/" + mint + ")";
     if (token.createTx) {
-      msg += " | [Tx](https://solscan.io/tx/" + token.createTx + ")";
+      msg += " · [Tx](https://solscan.io/tx/" + token.createTx + ")";
     }
     msg += "\n\n";
 
@@ -134,39 +135,39 @@ class Notifier {
     // ─── Market Data ──────────────────────────────
     if (token.dexInfo) {
       var di = token.dexInfo;
-      msg += "**📈 Market**\n";
-      msg += "- DEX: " + (di.dexName || "?") + "\n";
-      if (di.liquidityUsd) msg += "- Liq: $" + Math.round(di.liquidityUsd).toLocaleString() + "\n";
-      if (di.fdv) msg += "- FDV: $" + Math.round(di.fdv).toLocaleString() + "\n";
-      if (di.priceUsd) msg += "- Price: $" + Number(di.priceUsd).toFixed(8) + "\n";
-      if (di.volume24h) msg += "- 24h Vol: $" + Math.round(di.volume24h).toLocaleString() + "\n";
-      if (di.priceChange24h) msg += "- 24h Change: " + (di.priceChange24h > 0 ? "+" : "") + di.priceChange24h.toFixed(1) + "%\n";
+      msg += "**📈 市场数据**\n\n";
+      msg += "• DEX: " + (di.dexName || "?") + "\n";
+      if (di.priceUsd) msg += "• 价格: $" + Number(di.priceUsd).toFixed(8) + "\n";
+      if (di.fdv) msg += "• 市值: $" + Math.round(di.fdv).toLocaleString() + "\n";
+      if (di.liquidityUsd) msg += "• 流动性: $" + Math.round(di.liquidityUsd).toLocaleString() + "\n";
+      if (di.volume24h) msg += "• 24h量: $" + Math.round(di.volume24h).toLocaleString() + "\n";
+      if (di.priceChange24h) msg += "• 24h涨跌: " + (di.priceChange24h > 0 ? "+" : "") + di.priceChange24h.toFixed(1) + "%\n";
       msg += "\n";
     }
 
-    // ─── Trading Guide (only for high score) ──────
-    if (total >= 30) {
-      msg += "**💡 Trading Guide**\n";
-      msg += "- Position: Light (1-3% of capital)\n";
-      msg += "- Entry: Split into 2-3 orders\n";
-      msg += "- Stop loss: -30%\n";
-      msg += "- Take profit: +50% (principal), +100% (full)\n";
-      msg += "\n";
-    }
-
-    // ─── Star Rating ─────────────────────────────┬
+    // ─── Star Rating ──────────────────────────────
     var growth = ev && ev.growth;
     if (growth && growth.stars > 0) {
       var stars = "";
       for (var x = 0; x < 5; x++) {
         stars += (x < growth.stars) ? "★" : "☆";
       }
-      msg += "**🚀 Growth Potential** " + stars + " " + growth.stars + "/5\n";
+      msg += "**🚀 涨幅潜力** " + stars + " " + growth.stars + "/5\n\n";
       if (growth.signals && growth.signals.length > 0) {
         for (var s = 0; s < growth.signals.length; s++) {
-          msg += "  - " + growth.signals[s] + "\n";
+          msg += "• " + growth.signals[s] + "\n";
         }
       }
+      msg += "\n";
+    }
+
+    // ─── Trading Guide (only for high score) ──────
+    if (total >= 30) {
+      msg += "**💡 交易参考**\n\n";
+      msg += "• 仓位: 轻仓（1-3%）\n";
+      msg += "• 入场: 分 2-3 笔\n";
+      msg += "• 止损: -30%\n";
+      msg += "• 止盈: +50% 出本，+100% 清仓\n";
       msg += "\n";
     }
 
