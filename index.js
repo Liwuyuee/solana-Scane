@@ -91,6 +91,10 @@ async function main() {
 
     // 3) 四项评分 + 涨幅潜力 + 叙事生成
     const evalResult = analyzer.evaluate(report, devInfo, token.dexInfo);
+    // Use momentum scanner's one-line summary if available
+    if (token.summary) {
+      evalResult.summary = token.summary;
+    }
     console.log(`   总分: ${evalResult.total}/40 · ${evalResult.action}`);
     if (evalResult.growth && evalResult.growth.score > 0) {
       console.log(`   涨幅潜力: ${evalResult.growth.score}/10 ${evalResult.growth.emoji}`);
