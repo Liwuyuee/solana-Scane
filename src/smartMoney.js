@@ -6,8 +6,9 @@
  * Cross-references with the main monitor's seen set to avoid duplicates.
  */
 
-const RPC_URL = "https://api.mainnet-beta.solana.com";
 const PUMPFUN = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+const { apiFetch } = require("./fetch");
+const { rpcCall } = require("./rpc");
 
 // Known profitable wallets (source: public on-chain data)
 // These wallets have verified >$100K profit on Pump.fun
@@ -35,12 +36,57 @@ const KNOWN_WALLETS = [
 
 class SmartMoneyMonitor {
   constructor(seenMints) {
-    this.wallets = KNOWN_WALLETS;
+    this.wallets = KNOWN_WALLETS.slice();  // 硬编码钱包作为基础
     this.seenMints = seenMints;      // reference to main monitor's seen set
     this.seenSigs = new Set();        // sigs we already processed per wallet
     this.tokenWallets = {};           // mint -> [wallet addresses]
     this.callbacks = [];              // registered callbacks
     this.interval = null;
+
+    // 异步自动发现聪明钱包（不阻塞启动）
+    this.#refreshWallets();
+    // 每 24 小时刷新一次
+    setInterval(() => this.#refreshWallets(), 86400000);
+  }
+
+  /**
+   * 从 Gmgn.ai 自动发现最近 7 天盈利最高的 Solana 钱包
+   * 跟硬编码钱包合并去重
+   */
+  async #refreshWallets() {
+    try {
+      var res = await fetch("https://gmgn.ai/defi/quotation/v1/rank/sol/wallets/7d?limit=20", {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) return;
+      var data = await res.json();
+      var list = data.data || data.rank || [];
+      if (!Array.isArray(list) || list.length === 0) return;
+
+      // 从 API 提取钱包地址
+      var apiWallets = list
+        .map(function(w) { return w.wallet || w.address || ""; })
+        .filter(function(a) { return a.length > 30; });
+
+      if (apiWallets.length === 0) return;
+
+      // 合并去重：API 发现的新钱包排前面，硬编码钱包排后面
+      var seen = new Set(this.wallets);
+      var added = 0;
+      for (var i = 0; i < apiWallets.length; i++) {
+        if (!seen.has(apiWallets[i])) {
+          this.wallets.push(apiWallets[i]);
+          seen.add(apiWallets[i]);
+          added++;
+        }
+      }
+
+      if (added > 0) {
+        console.log("🧠 聪明钱自动发现: 新增 " + added + " 个钱包（共 " + this.wallets.length + " 个）");
+      }
+    } catch (e) {
+      // API 失败不影响运行，继续用已有钱包列表
+    }
   }
 
   /** Register callback for smart money buy alert */
@@ -84,17 +130,7 @@ class SmartMoneyMonitor {
 
   async #checkWallet(wallet) {
     try {
-      const res = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1,
-          method: "getSignaturesForAddress",
-          params: [wallet, { limit: 5 }],
-        }),
-      });
-      const data = await res.json();
-      const sigs = data.result || [];
+      const sigs = await rpcCall("getSignaturesForAddress", [wallet, { limit: 5 }]) || [];
       if (!sigs.length) return;
 
       for (let i = 0; i < sigs.length; i++) {
@@ -112,15 +148,7 @@ class SmartMoneyMonitor {
 
   async #analyzeTx(wallet, sig) {
     try {
-      const res = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1, method: "getTransaction",
-          params: [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
-        }),
-      });
-      const tx = (await res.json()).result;
+      const tx = await rpcCall("getTransaction", [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
       if (!tx || !tx.meta) return;
 
       // Check if this touches Pump.fun program
@@ -177,7 +205,8 @@ class SmartMoneyMonitor {
 
   async #fetchTokenInfo(mint) {
     try {
-      const res = await fetch("https://api.dexscreener.com/latest/dex/search/?q=" + mint);
+      const res = await // Use apiFetch for blocked domains
+      apiFetch("https://api.dexscreener.com/latest/dex/search/?q=" + mint, { signal: AbortSignal.timeout(30000) });
       if (res.ok) {
         const data = await res.json();
         const pair = (data.pairs || []).find(p => p.chainId === "solana");

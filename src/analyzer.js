@@ -8,7 +8,7 @@
  *
  * 输出：四项评分 + 叙事段落
  */
-const RPC_URL = "https://api.mainnet-beta.solana.com";
+const { rpcCall } = require("./rpc");
 
 class Analyzer {
   constructor() {
@@ -277,6 +277,84 @@ class Analyzer {
     return { risk: risk, reasons: reasons };
   }
 
+  // ─── Jupiter 链上路由检测 ───────────────────────────
+
+  /**
+   * 查询 Jupiter 聚合器，验证代币是否存在有效交易路线
+   * 如果 Jupiter 无法报价，说明该代币可能在所有 DEX 都无法卖出 → 貔貅
+   * @param {string} mint 代币地址
+   * @returns {Promise<{tradable: boolean, detail: string}>}
+   */
+  async checkJupiterRoute(mint) {
+    try {
+      var res = await fetch(
+        "https://quote-api.jup.ag/v6/quote?inputMint=" + mint +
+        "&outputMint=So11111111111111111111111111111111111111112" +
+        "&amount=100000&slippageBps=100"
+      );
+      if (!res.ok) {
+        return { tradable: false, detail: "Jupiter 无报价（HTTP " + res.status + "）" };
+      }
+      var data = await res.json();
+      if (data.error) {
+        return { tradable: false, detail: "Jupiter 无有效交易路线" };
+      }
+      return { tradable: true, detail: "Jupiter 可交易" };
+    } catch (e) {
+      return { tradable: false, detail: "Jupiter 查询失败" };
+    }
+  }
+
+  /**
+   * 使用 @solana/web3.js 链上模拟卖出交易
+   * 构建一笔卖出交易的指令，通过 simulateTransaction 验证能否卖出
+   * @param {string} mint 代币地址
+   * @returns {Promise<{sellable: boolean, detail: string}>}
+   */
+  async simulateSell(mint) {
+    try {
+      // 1) 从 Jupiter 获取交易路线和序列化指令
+      var quoteRes = await fetch(
+        "https://quote-api.jup.ag/v6/quote?inputMint=" + mint +
+        "&outputMint=So11111111111111111111111111111111111111112" +
+        "&amount=100000&slippageBps=100"
+      );
+      if (!quoteRes.ok) return { sellable: false, detail: "Jupiter 无报价，无法模拟" };
+      var quote = await quoteRes.json();
+      if (quote.error) return { sellable: false, detail: "无交易路线" };
+
+      // 2) 获取 swap 交易体
+      var swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quoteResponse: quote,
+          userPublicKey: "11111111111111111111111111111111", // dummy key
+          wrapAndUnwrapSol: true,
+          dynamicComputeUnitLimit: true,
+        }),
+      });
+      if (!swapRes.ok) return { sellable: false, detail: "Jupiter swap 接口异常" };
+      var swapData = await swapRes.json();
+
+      // 3) 使用 @solana/web3.js 模拟交易
+      var solanaWeb3 = require("@solana/web3.js");
+      var connection = new solanaWeb3.Connection("https://api.mainnet-beta.solana.com", "confirmed");
+      var txBytes = Buffer.from(swapData.swapTransaction, "base64");
+      var tx = solanaWeb3.VersionedTransaction.deserialize(txBytes);
+      var simResult = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true });
+
+      if (simResult.value.err) {
+        var errMsg = simResult.value.err.toString();
+        return { sellable: false, detail: "链上模拟卖出失败: " + errMsg.slice(0, 80) };
+      }
+
+      return { sellable: true, detail: "链上模拟卖出成功，非貔貅" };
+    } catch (e) {
+      return { sellable: false, detail: "模拟卖出异常: " + (e.message || e).slice(0, 80) };
+    }
+  }
+
   // ─── 叙事生成 ──────────────────────────────────────
 
   #buildNarrative(report, four, holders, dev, honeypot) {
@@ -396,42 +474,27 @@ class Analyzer {
   // ─── Holder 分析 ────────────────────────────────────
 
   async #analyzeHolders(mint) {
-    const supplyRes = await fetch(RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1,
-        method: "getTokenSupply",
-        params: [mint],
-      }),
-    });
-    const supplyData = await supplyRes.json();
-    const totalSupply = supplyData.result?.value?.uiAmount || 0;
-
-    const accountsRes = await fetch(RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1,
-        method: "getProgramAccounts",
-        params: [
-          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-          {
-            encoding: "jsonParsed",
-            filters: [
-              { dataSize: 165 },
-              { memcmp: { offset: 0, bytes: mint } },
-            ],
-          },
-        ],
-      }),
-    });
-    const accounts = (accountsRes.json && (await accountsRes.json()).result) || [];
+    const [supplyData, accountsData] = await Promise.all([
+      rpcCall("getTokenSupply", [mint]),
+      rpcCall("getProgramAccounts", [
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        {
+          encoding: "jsonParsed",
+          filters: [
+            { dataSize: 165 },
+            { memcmp: { offset: 0, bytes: mint } },
+          ],
+        },
+      ]),
+    ]);
+    const totalSupply = supplyData?.value?.uiAmount || 0;
+    const accounts = accountsData || [];
 
     const withBalance = accounts
       .map(function(a) {
         return {
-          address: a.pubkey,
+          address: a.pubkey,                                 // token account (ATA)
+          owner: a.account?.data?.parsed?.info?.owner || "", // wallet address
           amount: (a.account?.data?.parsed?.info?.tokenAmount?.uiAmount) || 0,
         };
       })
@@ -453,9 +516,10 @@ class Analyzer {
       totalHolders,
       totalSupply,
       top10Pct: Math.round(top10Pct * 10) / 10,
-      top10: top10.slice(0, 3).map(function(a) {
+      top10: top10.map(function(a) {
         return {
           address: a.address,
+          owner: a.owner,
           pct: totalSupply > 0 ? Math.round((a.amount / totalSupply) * 1000) / 10 : 0,
         };
       }),
@@ -473,7 +537,7 @@ class Analyzer {
     this.lastCall = Date.now();
 
     try {
-      var res = await fetch(this.apiBase + "/tokens/" + mint + "/report/summary");
+      var res = await fetch(this.apiBase + "/tokens/" + mint + "/report/summary", { signal: AbortSignal.timeout(30000) });
       if (res.status === 404) return this.#emptyRug();
       if (res.status === 429) return this.#emptyRug();
       if (!res.ok) return null;

@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
 // Prevent crash on unhandled promise rejections (RPC timeouts, network issues)
 process.on("unhandledRejection", function(err) {
@@ -13,17 +13,26 @@ const { Narrator } = require("./src/narrator");
 const { SmartMoneyMonitor } = require("./src/smartMoney");
 const { MomentumScanner } = require("./src/momentum");
 const { Store } = require("./src/store");
+const { ComplianceAgent } = require("./src/complianceAgent");
+const { PaperTrader } = require("./src/paperTrader");
 
 async function main() {
   console.log("╔══════════════════════════════════╗");
-  console.log("║   Solana 新币监控机器人 v2       ║");
-  console.log("║   ⚡ Pump.fun + Raydium 双扫描    ║");
-  console.log("║   📊 rugcheck + Holder + Dev     ║");
+  console.log("║   Solana 新币监控机器人 v3       ║");
+  console.log("║   ⚡ PumpPortal WebSocket 实时   ║");
+  console.log("║   🛡️ Helius RPC + 包发送检测    ║");
   console.log("║   💬 钉钉推送                    ║");
   console.log("╚══════════════════════════════════╝\n");
 
-  // 初始化各模块
+  // ─── 多 Agent 架构初始化 ──────────────────────────
+  // Sentinel Agent  →  实时监控新币（Monitor + SmartMoney + Momentum）
+  // Analyst Agent   →  评分 + AI 分析（Analyzer + Narrator + DevTracker）
+  // Compliance Agent → 风控检测 + 链上验证（ComplianceAgent）
+  // Executor Agent  →  推送 + 追踪（Notifier + RugAlarm + Store）
+  // ─────────────────────────────────────────────────
+
   const store = new Store();
+  const paperTrader = new PaperTrader(store);
   const existingMints = store.getExistingMints();
   const monitor = new Monitor(existingMints);
   if (existingMints.length > 0) {
@@ -33,6 +42,7 @@ async function main() {
   const notifier = new Notifier(process.env.DINGTALK_TOKEN);
   const devTracker = new DevTracker();
   const narrator = new Narrator();
+  const compliance = new ComplianceAgent();
 
   if (narrator.enabled) {
     console.log("🤖 AI 叙事: 已启用（Claude）");
@@ -118,15 +128,33 @@ async function main() {
       if (aiNarrative.launchDetail) evalResult.launchQ.detail = aiNarrative.launchDetail;
     }
 
-    // 5) 多层金狗过滤 ──────────────────────────────
+    // 5) Compliance 风控检测（包发送 + 链上模拟卖出）
+    // 异步非阻塞，5 秒超时兜底
+    var complianceResult = null;
+    try {
+      complianceResult = await Promise.race([
+        compliance.runAll(token.mint, report?.holders),
+        new Promise(function(r) { setTimeout(function() { r(null); }, 5000); }),
+      ]);
+      if (complianceResult) {
+        if (complianceResult.bundledSupply && complianceResult.bundledSupply.isBundled) {
+          console.log("   包发送检测: " + complianceResult.bundledSupply.detail);
+        }
+        if (complianceResult.sellTest) {
+          console.log("   链上卖出测试: " + complianceResult.sellTest.detail);
+        }
+      }
+    } catch (e) {}
+
+    // 6) 多层金狗过滤 ──────────────────────────────
     var failReasons = [];
 
-    // 5a) 总分阈值
+    // 6a) 总分阈值
     if (evalResult.total < MIN_SCORE) {
       failReasons.push("总分 " + evalResult.total + "/40 低于阈值 " + MIN_SCORE);
     }
 
-    // 5b) Honeypot 检测 → 跳过（避免貔貅）
+    // 6b) Honeypot 检测 → 跳过（避免貔貅）
     var hp = evalResult.honeypot;
     if (hp && hp.risk === "high") {
       failReasons.push("Honeypot 高风险，可能无法卖出");
@@ -135,34 +163,46 @@ async function main() {
       failReasons.push("Honeypot 存在可疑特征（" + (hp.reasons[0] || "") + "）");
     }
 
-    // 5c) Mint 权限未撤销 → 跳过（能增发就是定时炸弹）
+    // 6b2) 链上模拟卖出检测 → 跳过（仅当确实检测到貔貅，网络错误不拦）
+    var st = complianceResult && complianceResult.sellTest;
+    if (st && st.sellable === false && !st.networkError && !st.simulationSkipped) {
+      failReasons.push("链上模拟卖出失败: " + st.detail);
+    }
+
+    // 6b3) 包发送检测 → 跳过（高确信度）
+    var bs = complianceResult && complianceResult.bundledSupply;
+    if (bs && bs.isBundled && bs.confidence === "high") {
+      failReasons.push("包发送检测: " + bs.detail);
+    }
+
+    // 6c) Mint 权限未撤销 → 跳过（能增发就是定时炸弹）
     if (report && report.mintAuthority) {
       failReasons.push("Mint 权限未撤销，团队可无限增发");
     }
 
-    // 5d) 开发者有 rug 历史 → 跳过
+    // 6d) 开发者有 rug 历史 → 跳过
     if (devInfo && devInfo.ruggedCount > 0) {
       failReasons.push("部署者有 Rug 历史记录");
     }
 
-    // 5e) Holder 极度集中（>90%）→ 跳过
+    // 6e) Holder 极度集中（>90%）→ 跳过
     var holders = report && report.holders;
     if (holders && holders.top10Pct > 90) {
       failReasons.push("筹码极度集中（Top10 占 " + holders.top10Pct + "%）");
     }
 
-    // 5f) 部署者正在卖出 → 跳过
+    // 6f) 部署者正在卖出 → 跳过
     if (devInfo && devInfo.isSelling) {
       failReasons.push("部署者正在卖出，有砸盘风险");
     }
 
-    // 5g) 流动性不足 → 跳过
+    // 6g) 流动性不足 → 跳过
     var liq = token.dexInfo && token.dexInfo.liquidityUsd;
     if (liq > 0 && liq < MIN_LIQUIDITY) {
       failReasons.push("流动性不足（$" + Math.round(liq).toLocaleString() + " < $" + MIN_LIQUIDITY.toLocaleString() + "）");
     }
 
-    // 5h) 未毕业到 Raydium/主流 DEX → 跳过（只在 Pump.fun 上的太危险）
+    // 6h) 未毕业到 Raydium/主流 DEX → 跳过（只在 Pump.fun 上的太危险）
     var dexName = token.dexInfo && token.dexInfo.dexName;
     if (dexName && dexName !== "raydium" && dexName !== "orca" && dexName !== "jupiter") {
       // 有 DEX 信息但不是主流 DEX → 警告但不阻止
@@ -173,7 +213,7 @@ async function main() {
       }
     }
 
-    // 5i) 存活时间不够长（可选）→ 跳过
+    // 6i) 存活时间不够长（可选）→ 跳过
     var createdAt = token.dexInfo && token.dexInfo.pairCreatedAt;
     if (createdAt) {
       var ageHours = (Date.now() - createdAt) / 3600000;
@@ -185,25 +225,76 @@ async function main() {
     if (failReasons.length > 0) {
       console.log("   ⏭ 金狗过滤未通过:");
       failReasons.forEach(function(r) { console.log("      - " + r); });
+      paperTrader.record(token, evalResult, false);
       return;
     }
 
     console.log("   🐕 金狗检测通过! 推送中...");
 
-    // 6) 推送钉钉
+    // 7) 推送钉钉
     try {
       await notifier.push(token, report, evalResult);
       console.log(`   ✅ 已推送`);
+
+      // 8) 回测记录 + Rug Alarm
+      paperTrader.record(token, evalResult, true);
+      startRugAlarm(token, devTracker);
     } catch (e) {
       console.error(`   ❌ 推送失败: ${e.message}`);
     }
+  }
+
+  /**
+   * Rug Alarm：推送后持续监控价格，检测暴跌
+   * 每 3 分钟查一次 DexScreener，持续 20 分钟
+   * 如果价格跌超 60%，记录部署者 rug 行为
+   */
+  function startRugAlarm(token, devTracker) {
+    var mint = token.mint;
+    var initialPrice = token.dexInfo && token.dexInfo.priceUsd;
+    if (!initialPrice || initialPrice <= 0) return;
+
+    var checks = 0;
+    var MAX_CHECKS = 7;      // 7 × 3min ≈ 21 分钟
+    var CHECK_INTERVAL = 180000; // 3 分钟
+    var DROP_THRESHOLD = 0.6;    // 跌 60%
+
+    var timer = setInterval(async function() {
+      checks++;
+      try {
+        var res = await fetch("https://api.dexscreener.com/latest/dex/search/?q=" + mint);
+        if (res.ok) {
+          var data = await res.json();
+          var pair = (data.pairs || []).find(function(p) { return p.chainId === "solana"; });
+          if (pair && pair.priceUsd) {
+            var currentPrice = parseFloat(pair.priceUsd);
+            var drop = (parseFloat(initialPrice) - currentPrice) / parseFloat(initialPrice);
+
+            if (drop > DROP_THRESHOLD) {
+              console.log("   🚨 Rug 警报! " + (token.symbol || mint.slice(0, 8)) + " 已暴跌 " + (drop * 100).toFixed(0) + "%（¥" + initialPrice + " → ¥" + currentPrice + "）");
+              if (token.creator && devTracker) {
+                devTracker.reportRug(token.creator);
+              }
+              clearInterval(timer);
+              return;
+            }
+          }
+        }
+      } catch (e) {}
+
+      if (checks >= MAX_CHECKS) {
+        clearInterval(timer);
+        console.log("   ✅ " + (token.symbol || mint.slice(0, 8)) + " Rug 监控完成，20 分钟内未暴跌");
+      }
+    }, CHECK_INTERVAL);
   }
 
   // 注册新币回调
   monitor.setNewTokenCallback(processToken);
 
   console.log(`🌐 代理: ${process.env.HTTP_PROXY || process.env.HTTPS_PROXY || "直连"}`);
-  console.log("📡 DexScreener 兜底每 30 秒扫描一次\n");
+  console.log("📡 DexScreener 兜底每 30 秒扫描一次");
+  console.log("  注: DexScreener 在中国网络可能超时，不影响主扫链\n");
   console.log("等待新币...\n");
 }
 

@@ -11,11 +11,32 @@ const PUMPFUN = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const RAYDIUM_AMM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 const WSOL = "So11111111111111111111111111111111111111112";
 const RAYDIUM_CPMM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
-const RPC_URL = "https://api.mainnet-beta.solana.com";
 const POLL_INTERVAL = 10000;
 const RAYDIUM_INTERVAL = 15000;
+const { apiFetch } = require("./fetch");
+const { rpcCall } = require("./rpc");
+
+// WebSocket 走代理（中国网络需要）
+var WS_CONNECT = null;
+try {
+  var proxyUrl = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || "";
+  if (proxyUrl) {
+    var { HttpsProxyAgent } = require("https-proxy-agent");
+    WS_CONNECT = function(url) {
+      var WebSocket = require("ws");
+      var agent = new HttpsProxyAgent(proxyUrl);
+      return new WebSocket(url, { agent: agent });
+    };
+  }
+} catch (e) {}
+// 如果代理加载失败，用原生 WebSocket
+if (!WS_CONNECT) {
+  WS_CONNECT = function(url) { return new WebSocket(url); };
+}
 
 class Monitor {
+  #ws = null;
+
   constructor(existingMints) {
     this.seen = new Set(existingMints || []);  // 从数据库加载已扫 mint
     this.seenPumpSigs = new Set();
@@ -25,11 +46,123 @@ class Monitor {
     this.#startPumpfunPolling();
     this.#startRaydiumPolling();
     this._startDexFallback();
+    this.#connectPumpPortal();  // WebSocket 实时推送（比 HTTP 轮询快 10 倍）
   }
 
   /** 注册新代币回调 */
   setNewTokenCallback(fn) {
     this.onNewToken = fn;
+  }
+
+  // ─── PumpPortal WebSocket 实时推送 ────────────────────
+  // 比 HTTP 轮询快 10 倍，延迟从 10s 降至 <1s
+  // HTTP 轮询保留作为兜底
+
+  #connectPumpPortal() {
+    var self = this;
+    var reconnectTimer = null;
+    var keepAliveTimer = null;
+
+    function connect() {
+      try {
+        self.#ws = WS_CONNECT("wss://pumpportal.fun/api/data");
+
+        self.#ws.onopen = function() {
+          console.log("  🔌 PumpPortal WebSocket 已连接");
+          // 每 25 秒发一次 ping 保持连接活跃
+          if (keepAliveTimer) clearInterval(keepAliveTimer);
+          keepAliveTimer = setInterval(function() {
+            if (self.#ws && self.#ws.readyState === 1) {
+              try { self.#ws.ping(); } catch(e) {}
+            }
+          }, 25000);
+        };
+
+        self.#ws.onmessage = function(event) {
+          try {
+            var data = JSON.parse(event.data);
+          // PumpPortal 推送的字段: mint, name, symbol, creator, description, twitter, telegram, website, uri, txHash
+          var mint = data.mint || "";
+          if (!mint) return;
+
+          // 去重（seen 集合与 HTTP 轮询共享）
+          if (this.seen.has(mint)) return;
+          this.seen.add(mint);
+
+          console.log("🎯 PumpPortal 实时: " + (data.name || mint.slice(0, 10)) + " (" + (data.symbol || "?") + ")");
+
+          var token = {
+            mint: mint,
+            name: data.name || mint.slice(0, 8),
+            symbol: data.symbol || "?",
+            creator: data.creator || "",
+            source: "pumpportal",
+            description: data.description || "",
+            socials: {
+              twitter: data.twitter || "",
+              telegram: data.telegram || "",
+              website: data.website || "",
+            },
+            dexInfo: null,
+          };
+
+          // 异步补全 DexScreener 信息（不阻塞回调）
+          this.#enrichExisting(token);
+
+          if (this.onNewToken) this.onNewToken(token);
+        } catch (e) {
+          // 解析失败静默忽略
+        }
+      };
+
+        self.#ws.onclose = function() {
+          self.#ws = null;
+          if (keepAliveTimer) clearInterval(keepAliveTimer);
+          // 固定 3 秒重连，避免漏币
+          console.log("  🔌 PumpPortal 断线，3 秒后重连...");
+          reconnectTimer = setTimeout(connect, 3000);
+        };
+
+        self.#ws.onerror = function() {
+          // onclose 会在 onerror 后触发
+        };
+      } catch (e) {
+        // WebSocket 创建失败，3 秒后重试
+        reconnectTimer = setTimeout(connect, 3000);
+      }
+    }
+
+    connect();
+  }
+
+  /** 异步补全 WebSocket 收到的代币信息（不阻塞主流程） */
+  async #enrichExisting(token) {
+    try {
+      var res = await // Use apiFetch for blocked domains
+      apiFetch("https://api.dexscreener.com/latest/dex/search/?q=" + token.mint, { signal: AbortSignal.timeout(30000) });
+      if (res.ok) {
+        var data = await res.json();
+        var pair = (data.pairs || []).find(function(p) { return p.chainId === "solana"; });
+        if (pair && pair.baseToken) {
+          token.name = pair.baseToken.name || token.name;
+          token.symbol = pair.baseToken.symbol || token.symbol;
+          token.dexInfo = {
+            dexName: pair.dexId || "",
+            pairAddress: pair.pairAddress || "",
+            pairCreatedAt: pair.pairCreatedAt || 0,
+            liquidityUsd: pair.liquidity?.usd || 0,
+            fdv: pair.fdv || 0,
+            priceUsd: pair.priceUsd || 0,
+            priceChange24h: pair.priceChange?.h24 || 0,
+            volume24h: pair.volume?.h24 || 0,
+            volume6h: pair.volume?.h6 || 0,
+            volume1h: pair.volume?.h1 || 0,
+            txns24h: pair.txns?.h24 || { buys: 0, sells: 0 },
+            url: pair.url || "",
+          };
+        }
+      }
+    } catch (e) {}
   }
 
   // ─── HTTP 轮询 Pump.fun 程序签名 ─────────────────
@@ -54,18 +187,7 @@ class Monitor {
 
   async #pollSignatures() {
     // 取最近 10 条签名
-    var res = await fetch(RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1,
-        method: "getSignaturesForAddress",
-        params: [PUMPFUN, { limit: 10 }],
-      }),
-    });
-    if (!res.ok) return;
-    var data = await res.json();
-    var sigs = data.result || [];
+    var sigs = await rpcCall("getSignaturesForAddress", [PUMPFUN, { limit: 10 }]) || [];
     if (sigs.length === 0) return;
 
     // 从最新到最旧处理，记录最新的作为断点
@@ -75,8 +197,8 @@ class Monitor {
     var newSigs = [];
     for (var i = 0; i < sigs.length; i++) {
       var s = sigs[i].signature;
-      if (!this.seenSigs.has(s)) {
-        this.seenSigs.add(s);
+      if (!this.seenPumpSigs.has(s)) {
+        this.seenPumpSigs.add(s);
         newSigs.push(s);
       }
     }
@@ -113,18 +235,7 @@ class Monitor {
   }
 
   async #pollRaydium() {
-    var res = await fetch(RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1,
-        method: "getSignaturesForAddress",
-        params: [RAYDIUM_AMM, { limit: 10 }],
-      }),
-    });
-    if (!res.ok) return;
-    var data = await res.json();
-    var sigs = data.result || [];
+    var sigs = await rpcCall("getSignaturesForAddress", [RAYDIUM_AMM, { limit: 10 }]) || [];
     if (sigs.length === 0) return;
 
     // Process new signatures
@@ -150,15 +261,7 @@ class Monitor {
   async #parseRaydiumTx(sig) {
     var tx;
     try {
-      var res = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1, method: "getTransaction",
-          params: [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
-        }),
-      });
-      tx = (await res.json()).result;
+      tx = await rpcCall("getTransaction", [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
     } catch (e) {
       return;
     }
@@ -196,15 +299,7 @@ class Monitor {
   async #parseTx(sig) {
     var tx;
     try {
-      var res = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1, method: "getTransaction",
-          params: [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
-        }),
-      });
-      tx = (await res.json()).result;
+      tx = await rpcCall("getTransaction", [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
     } catch (err) {
       return;
     }
@@ -263,7 +358,8 @@ class Monitor {
     };
 
     try {
-      var res = await fetch("https://api.dexscreener.com/latest/dex/search/?q=" + mint);
+      var res = await // Use apiFetch for blocked domains
+      apiFetch("https://api.dexscreener.com/latest/dex/search/?q=" + mint, { signal: AbortSignal.timeout(30000) });
       if (res.ok) {
         var data = await res.json();
         var pairs = data.pairs || [];
@@ -305,7 +401,8 @@ class Monitor {
     var self = this;
     async function poll() {
       try {
-        var res = await fetch("https://api.dexscreener.com/token-boosts/latest/v1");
+        var res = await // Use apiFetch for blocked domains
+      apiFetch("https://api.dexscreener.com/token-boosts/latest/v1", { signal: AbortSignal.timeout(30000) });
         if (!res.ok) return;
         var data = await res.json();
         if (!Array.isArray(data)) return;
@@ -342,7 +439,8 @@ class Monitor {
 
           // 补全名称
           try {
-            var r = await fetch("https://api.dexscreener.com/latest/dex/search/?q=" + addr);
+            var r = await // Use apiFetch for blocked domains
+      apiFetch("https://api.dexscreener.com/latest/dex/search/?q=" + addr, { signal: AbortSignal.timeout(30000) });
             if (r.ok) {
               var d = await r.json();
               var p = d.pairs && d.pairs[0];
@@ -356,7 +454,7 @@ class Monitor {
           if (self.onNewToken) self.onNewToken(token);
         }
       } catch (e) {
-        if (e && e.message) console.warn("  DexScreener 失败:", e.message);
+        // DexScreener 在中国访问不稳定，失败不影响主扫链
       }
       setTimeout(poll, 30000);
     }

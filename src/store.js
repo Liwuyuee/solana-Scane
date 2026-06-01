@@ -55,6 +55,23 @@ class Store {
 
       CREATE INDEX IF NOT EXISTS idx_tokens_score ON tokens(total_score DESC);
       CREATE INDEX IF NOT EXISTS idx_tokens_created ON tokens(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS snapshots (
+        mint TEXT PRIMARY KEY,
+        name TEXT,
+        symbol TEXT,
+        detected_at TEXT DEFAULT (datetime('now')),
+        price_initial REAL DEFAULT 0,
+        price_1h REAL DEFAULT 0,
+        price_6h REAL DEFAULT 0,
+        price_24h REAL DEFAULT 0,
+        score INTEGER DEFAULT 0,
+        action TEXT,
+        passed_filter INTEGER DEFAULT 0,
+        checked_1h INTEGER DEFAULT 0,
+        checked_6h INTEGER DEFAULT 0,
+        checked_24h INTEGER DEFAULT 0
+      );
     `);
   }
 
@@ -151,6 +168,93 @@ class Store {
         ROUND(AVG(total_score), 1) as avg_score
       FROM tokens
     `).get();
+  }
+
+  // ─── 回测快照 ─────────────────────────────────────────
+
+  /** 创建初始快照 */
+  saveSnapshot(mint, name, symbol, priceInitial, score, action, passed) {
+    this.db.prepare(`
+      INSERT INTO snapshots (mint, name, symbol, price_initial, price_1h, price_6h, price_24h, score, action, passed_filter, checked_1h, checked_6h, checked_24h)
+      VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, 0, 0)
+      ON CONFLICT(mint) DO NOTHING
+    `).run(mint, name || "", symbol || "", priceInitial || 0, score || 0, action || "", passed ? 1 : 0);
+  }
+
+  /** 更新某个时间点的价格 + 标记已检查 */
+  updateSnapshotPrice(mint, field, price) {
+    var sql = (field === "initial") ? "UPDATE snapshots SET price_initial = ? WHERE mint = ?" :
+              (field === "1h") ? "UPDATE snapshots SET price_1h = ?, checked_1h = 1 WHERE mint = ?" :
+              (field === "6h") ? "UPDATE snapshots SET price_6h = ?, checked_6h = 1 WHERE mint = ?" :
+              (field === "24h") ? "UPDATE snapshots SET price_24h = ?, checked_24h = 1 WHERE mint = ?" : null;
+    if (!sql) return;
+    this.db.prepare(sql).run(price || 0, mint);
+  }
+
+  /** 检查某个时间点是否已记录 */
+  isSnapshotChecked(mint, field) {
+    var col = (field === "1h") ? "checked_1h" :
+              (field === "6h") ? "checked_6h" :
+              (field === "24h") ? "checked_24h" : null;
+    if (!col) return false;
+    var row = this.db.prepare(`SELECT ${col} FROM snapshots WHERE mint = ?`).get(mint);
+    return row ? !!row[col] : false;
+  }
+
+  /** 获取所有快照用于报告 */
+  getAllSnapshots() {
+    return this.db.prepare("SELECT * FROM snapshots ORDER BY detected_at DESC").all();
+  }
+
+  /** 按分数段统计胜率 */
+  getWinRates() {
+    var rows = this.db.prepare(`
+      SELECT
+        CASE
+          WHEN score >= 34 THEN '34-40'
+          WHEN score >= 30 THEN '30-33'
+          WHEN score >= 26 THEN '26-29'
+          ELSE '<26'
+        END as score_range,
+        COUNT(*) as total,
+        SUM(CASE WHEN price_24h > price_initial * 1.05 THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN price_24h < price_initial * 0.95 THEN 1 ELSE 0 END) as losses,
+        ROUND(AVG(CASE WHEN price_24h > 0 THEN (price_24h - price_initial) / price_initial * 100 ELSE NULL END), 1) as avg_return
+      FROM snapshots
+      WHERE price_initial > 0 AND checked_24h = 1
+      GROUP BY score_range
+      ORDER BY MIN(score) DESC
+    `).all();
+    return rows;
+  }
+
+  /** 最佳/最差表现 TOP N */
+  getTopPerformers(limit, desc) {
+    var order = desc ? "DESC" : "ASC";
+    return this.db.prepare(`
+      SELECT mint, name, symbol, score, action, detected_at, price_initial, price_24h,
+        ROUND((price_24h - price_initial) / price_initial * 100, 1) as return_pct
+      FROM snapshots
+      WHERE price_initial > 0 AND checked_24h = 1 AND price_24h > 0
+      ORDER BY return_pct ${order}
+      LIMIT ?
+    `).all(limit || 5);
+  }
+
+  /** 汇总统计 */
+  getPnLSummary() {
+    var row = this.db.prepare(`
+      SELECT
+        COUNT(*) as total_tracked,
+        SUM(CASE WHEN checked_24h = 1 AND price_initial > 0 THEN 1 ELSE 0 END) as settled,
+        ROUND(AVG(CASE WHEN checked_24h = 1 AND price_initial > 0 THEN (price_24h - price_initial) / price_initial * 100 ELSE NULL END), 1) as avg_return_24h,
+        SUM(CASE WHEN checked_24h = 1 AND price_24h > price_initial * 1.05 THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN checked_24h = 1 AND price_24h < price_initial * 0.95 THEN 1 ELSE 0 END) as losses,
+        SUM(CASE WHEN passed_filter = 1 AND checked_24h = 1 AND price_24h > price_initial * 1.05 THEN 1 ELSE 0 END) as gold_wins,
+        SUM(CASE WHEN passed_filter = 1 AND checked_24h = 1 THEN 1 ELSE 0 END) as gold_total
+      FROM snapshots
+    `).get();
+    return row || { total_tracked: 0, settled: 0, avg_return_24h: 0, wins: 0, losses: 0, gold_wins: 0, gold_total: 0 };
   }
 
   close() {

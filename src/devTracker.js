@@ -4,8 +4,8 @@
  * 内存存储，重启重置。
  * 记录每个部署者创建的代币、rug 历史、卖出行为。
  */
-const RPC_URL = "https://api.mainnet-beta.solana.com";
 const RUGCHECK_API = "https://api.rugcheck.xyz/v1";
+const { rpcCall } = require("./rpc");
 
 class DevTracker {
   constructor() {
@@ -57,29 +57,12 @@ class DevTracker {
     record.checked = true;
 
     try {
-      var sigsRes = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1,
-          method: "getSignaturesForAddress",
-          params: [creator, { limit: 20 }],
-        }),
-      });
-      var sigs = (await sigsRes.json()).result || [];
+      var sigs = await rpcCall("getSignaturesForAddress", [creator, { limit: 20 }]) || [];
       var seenMints = new Set(record.tokenMints);
 
       for (var i = 0; i < sigs.length; i++) {
         try {
-          var txRes = await fetch(RPC_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              jsonrpc: "2.0", id: 1, method: "getTransaction",
-              params: [sigs[i].signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
-            }),
-          });
-          var tx = (await txRes.json()).result;
+          var tx = await rpcCall("getTransaction", [sigs[i].signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
           if (!tx || !tx.meta) continue;
 
           var post = tx.meta.postTokenBalances || [];
@@ -109,27 +92,10 @@ class DevTracker {
     record.lastSellCheck = Date.now();
 
     try {
-      var sigsRes = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1,
-          method: "getSignaturesForAddress",
-          params: [creator, { limit: 5 }],
-        }),
-      });
-      var sigs = (await sigsRes.json()).result || [];
+      var sigs = await rpcCall("getSignaturesForAddress", [creator, { limit: 5 }]) || [];
 
       for (var i = 0; i < sigs.length; i++) {
-        var txRes = await fetch(RPC_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0", id: 1, method: "getTransaction",
-            params: [sigs[i].signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }],
-          }),
-        });
-        var tx = (await txRes.json()).result;
+        var tx = await rpcCall("getTransaction", [sigs[i].signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
         if (!tx || !tx.meta) continue;
 
         var logs = tx.meta.logMessages || [];
@@ -147,7 +113,7 @@ class DevTracker {
 
   async #checkRug(mint, record) {
     try {
-      var res = await fetch(RUGCHECK_API + "/tokens/" + mint + "/report/summary");
+      var res = await fetch(RUGCHECK_API + "/tokens/" + mint + "/report/summary", { signal: AbortSignal.timeout(30000) });
       if (res.status === 404) return;
       if (!res.ok) return;
       var data = await res.json();
@@ -163,6 +129,19 @@ class DevTracker {
     if (record.tokensCreated >= 5) return "频繁发币";
     if (record.tokensCreated >= 2) return "有经验";
     return "首次发币";
+  }
+
+  /**
+   * 手动上报 rug 事件（由 Rug Alarm 调用）
+   * 推送后发现价格暴跌时调用此方法记录
+   */
+  reportRug(creator) {
+    if (!creator || creator.length < 30) return;
+    var record = this.db.get(creator);
+    if (record) {
+      record.ruggedCount++;
+      console.log("   👤 部署者 " + creator.slice(0, 8) + "... Rug计数 +1（当前 " + record.ruggedCount + " 次）");
+    }
   }
 }
 

@@ -7,6 +7,12 @@
  */
 const DEX_API = "https://api.dexscreener.com/latest/dex/search";
 
+// DexScreener 在中国访问较慢，设 25s 超时
+const FETCH_TIMEOUT = 30000;
+function dexFetch(url) {
+  return fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+}
+
 class MomentumScanner {
   constructor(seen) {
     this.seen = seen;         // shared seen set with main monitor
@@ -30,7 +36,7 @@ class MomentumScanner {
     try {
       // Source 1: Check trending by searching common patterns
       // DexScreener search API: get recently active Solana pairs
-      var res = await fetch("https://api.dexscreener.com/token-boosts/latest/v1");
+      var res = await dexFetch("https://api.dexscreener.com/token-boosts/latest/v1");
       if (!res.ok) return;
       var data = await res.json();
       if (!Array.isArray(data)) return;
@@ -71,13 +77,13 @@ class MomentumScanner {
         if (this.onMomentumToken) this.onMomentumToken(token);
       }
     } catch (e) {
-      if (e && e.message) console.warn("  动量扫描失败:", e.message);
+      // 动量扫描依赖 DexScreener，在中国可能不稳定
     }
   }
 
   async _fetchPair(addr) {
     try {
-      var res = await fetch(DEX_API + "/?q=" + addr);
+      var res = await dexFetch(DEX_API + "/?q=" + addr);
       if (!res.ok) return null;
       var data = await res.json();
       var pairs = data.pairs || [];
@@ -143,7 +149,7 @@ class MomentumScanner {
     try {
       // Search for token symbol + "solana" on Twitter/X
       var query = encodeURIComponent((symbol || name || "").slice(0, 10) + " solana");
-      var res = await fetch("https://api.dexscreener.com/latest/dex/search/?q=" + addr);
+      var res = await dexFetch("https://api.dexscreener.com/latest/dex/search/?q=" + addr);
       if (!res.ok) return result;
 
       var data = await res.json();
