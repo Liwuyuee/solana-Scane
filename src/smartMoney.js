@@ -50,33 +50,52 @@ class SmartMoneyMonitor {
   }
 
   /**
-   * 从 Gmgn.ai 自动发现最近 7 天盈利最高的 Solana 钱包
-   * 跟硬编码钱包合并去重
+   * 从链上 Pump.fun 交易自动发现聪明钱包
+   *
+   * 原理：查最近 Pump.fun 交易，找那些经常买新币的钱包。
+   * 如果某个钱包在多个交易中买入新代币，说明它是"聪明钱"。
+   *
+   * 不用外部 API，纯链上数据。
    */
   async #refreshWallets() {
     try {
-      var res = await fetch("https://gmgn.ai/defi/quotation/v1/rank/sol/wallets/7d?limit=20", {
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!res.ok) return;
-      var data = await res.json();
-      var list = data.data || data.rank || [];
-      if (!Array.isArray(list) || list.length === 0) return;
+      // 取最近 30 条 Pump.fun 签名
+      var sigs = await rpcCall("getSignaturesForAddress", [PUMPFUN, { limit: 30 }]);
+      if (!sigs || sigs.length === 0) return;
 
-      // 从 API 提取钱包地址
-      var apiWallets = list
-        .map(function(w) { return w.wallet || w.address || ""; })
-        .filter(function(a) { return a.length > 30; });
-
-      if (apiWallets.length === 0) return;
-
-      // 合并去重：API 发现的新钱包排前面，硬编码钱包排后面
+      // 提取所有钱包地址（交易发起者 = fee payer）
+      var buyerCounts = {};
       var seen = new Set(this.wallets);
+
+      for (var i = 0; i < sigs.length; i++) {
+        try {
+          var tx = await rpcCall("getTransaction", [sigs[i].signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
+          if (!tx || !tx.meta) continue;
+
+          // 检查是否是 Pump.fun 交易
+          var logs = tx.meta.logMessages || [];
+          var touchesPump = logs.some(function(l) { return l.indexOf("Program log: Instruction") >= 0; });
+          if (!touchesPump) continue;
+
+          // 找 fee payer（出 gas 的钱包 = 发起交易的钱包）
+          var accountKeys = tx.transaction?.message?.accountKeys || [];
+          var buyer = accountKeys[0]?.pubkey || "";
+          if (!buyer || buyer.length < 30) continue;
+
+          // 忽略已知的 Pump.fun 程序地址
+          if (buyer === PUMPFUN) continue;
+
+          if (!buyerCounts[buyer]) buyerCounts[buyer] = 0;
+          buyerCounts[buyer]++;
+        } catch (e) {}
+      }
+
+      // 出现 3 次以上的钱包可能是聪明钱（活跃交易者）
       var added = 0;
-      for (var i = 0; i < apiWallets.length; i++) {
-        if (!seen.has(apiWallets[i])) {
-          this.wallets.push(apiWallets[i]);
-          seen.add(apiWallets[i]);
+      for (var wallet in buyerCounts) {
+        if (buyerCounts[wallet] >= 3 && !seen.has(wallet)) {
+          this.wallets.push(wallet);
+          seen.add(wallet);
           added++;
         }
       }

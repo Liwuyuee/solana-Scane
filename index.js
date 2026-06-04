@@ -63,7 +63,10 @@ async function main() {
     processToken(token);
   });
   smartMoney.start();
-  console.log("🧠 聪明钱钱包: " + smartMoney.wallets.length + " 个");
+  // 延迟 5 秒等自动发现完成后再显示准确数量
+  setTimeout(function() {
+    console.log("🧠 聪明钱钱包: " + smartMoney.wallets.length + " 个（含自动发现）");
+  }, 5000);
 
   // 动量异动监控（FDV > $200K 的币检测放量异动）
   const momentumScanner = new MomentumScanner(monitor.seen);
@@ -241,6 +244,7 @@ async function main() {
 
     // 8) 推送钉钉
     try {
+      token.catCount = store.getCategoryCount(category);
       await notifier.push(token, report, evalResult);
       console.log(`   ✅ 已推送`);
 
