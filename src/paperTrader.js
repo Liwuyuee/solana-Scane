@@ -18,7 +18,7 @@ class PaperTrader {
   /**
    * 记录新检测的代币，启动价格追踪
    */
-  record(token, evalResult, passedFilter) {
+  record(token, evalResult, passedFilter, category) {
     var mint = token.mint;
     var name = token.name || "";
     var symbol = token.symbol || "";
@@ -27,7 +27,7 @@ class PaperTrader {
     var action = (evalResult && evalResult.action) || "";
 
     // 写入 DB
-    this.store.saveSnapshot(mint, name, symbol, price, score, action, passedFilter);
+    this.store.saveSnapshot(mint, name, symbol, price, score, action, passedFilter, category || "");
 
     // 如果没价格数据，重试几次等 DEX 信息出现
     if (!price || price <= 0) {

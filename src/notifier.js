@@ -50,6 +50,18 @@ class Notifier {
     var msg = "";
     // ─── Header ─────────────────────────────────────
     msg += "### " + totalEmoji + " 新币 · " + action + " · " + total + "/40\n\n";
+
+    // 分类标签
+    var cat = token.category || "";
+    if (cat) {
+      msg += "📂 `" + cat + "`  ";
+    }
+    msg += "✅ 已验证  ";
+    if (token.createTx) {
+      msg += "📦 `" + token.createTx.slice(0, 8) + "`";
+    }
+    msg += "\n\n";
+
     msg += "> " + summary + "\n\n";
 
     // ─── Token Info ────────────────────────────────
@@ -57,14 +69,23 @@ class Notifier {
     if (token.smartCount && token.smartCount > 0) {
       msg += "  🧠 x" + token.smartCount;
     }
-    msg += "\n\n";
-    msg += "> `" + mint + "`\n\n";
+    msg += "  ✅ 已验证\n\n";
+    msg += "`" + mint + "`\n\n";
     msg += "🪙 SOL / " + sym + "\n\n";
     msg += "[Solscan](https://solscan.io/token/" + mint + ") · [Chart](https://dexscreener.com/solana/" + mint + ")";
     if (token.createTx) {
-      msg += " · [Tx](https://solscan.io/tx/" + token.createTx + ")";
+      msg += " · [创建Tx](https://solscan.io/tx/" + token.createTx + ")";
     }
     msg += "\n\n";
+
+    // ─── 社交链接 ────────────────────────────────
+    var links = [];
+    if (token.socials && token.socials.website) links.push("[官网](" + token.socials.website + ")");
+    if (token.socials && token.socials.twitter) links.push("[🐦 Twitter](" + token.socials.twitter + ")");
+    if (token.socials && token.socials.telegram) links.push("[💬 TG](" + token.socials.telegram + ")");
+    if (links.length > 0) {
+      msg += "**🔗 链接**\n" + links.join(" · ") + "\n\n";
+    }
 
     // ─── Scores ────────────────────────────────────
     msg += "**📊 Scores (out of 10)**\n\n";
@@ -104,15 +125,6 @@ class Notifier {
       msg += "- ⚠️ Admin keys exist\n";
     }
     msg += "\n";
-
-    // ─── Links ────────────────────────────────────
-    var links = [];
-    if (token.socials && token.socials.website) links.push("[Website](" + token.socials.website + ")");
-    if (token.socials && token.socials.twitter) links.push("[Twitter](" + token.socials.twitter + ")");
-    if (token.socials && token.socials.telegram) links.push("[Telegram](" + token.socials.telegram + ")");
-    if (links.length > 0) {
-      msg += "**🔗 Links**\n" + links.join(" | ") + "\n\n";
-    }
 
     // ─── Highlights ────────────────────────────────
     if (highlights.length > 0) {

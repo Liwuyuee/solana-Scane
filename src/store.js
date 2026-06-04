@@ -70,7 +70,8 @@ class Store {
         passed_filter INTEGER DEFAULT 0,
         checked_1h INTEGER DEFAULT 0,
         checked_6h INTEGER DEFAULT 0,
-        checked_24h INTEGER DEFAULT 0
+        checked_24h INTEGER DEFAULT 0,
+        category TEXT DEFAULT ''
       );
     `);
   }
@@ -173,12 +174,26 @@ class Store {
   // ─── 回测快照 ─────────────────────────────────────────
 
   /** 创建初始快照 */
-  saveSnapshot(mint, name, symbol, priceInitial, score, action, passed) {
+  saveSnapshot(mint, name, symbol, priceInitial, score, action, passed, category) {
     this.db.prepare(`
-      INSERT INTO snapshots (mint, name, symbol, price_initial, price_1h, price_6h, price_24h, score, action, passed_filter, checked_1h, checked_6h, checked_24h)
-      VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, 0, 0)
+      INSERT INTO snapshots (mint, name, symbol, price_initial, price_1h, price_6h, price_24h, score, action, passed_filter, checked_1h, checked_6h, checked_24h, category)
+      VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, 0, 0, ?)
       ON CONFLICT(mint) DO NOTHING
-    `).run(mint, name || "", symbol || "", priceInitial || 0, score || 0, action || "", passed ? 1 : 0);
+    `).run(mint, name || "", symbol || "", priceInitial || 0, score || 0, action || "", passed ? 1 : 0, category || "");
+  }
+
+  /** 获取分类统计 */
+  getCategoryStats() {
+    return this.db.prepare(`
+      SELECT category, COUNT(*) as c FROM snapshots WHERE category != '' GROUP BY category ORDER BY c DESC
+    `).all();
+  }
+
+  /** 获取某个分类的出现次数 */
+  getCategoryCount(category) {
+    if (!category) return 0;
+    var row = this.db.prepare("SELECT COUNT(*) as c FROM snapshots WHERE category = ?").get(category);
+    return row ? row.c : 0;
   }
 
   /** 更新某个时间点的价格 + 标记已检查 */

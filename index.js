@@ -15,6 +15,7 @@ const { MomentumScanner } = require("./src/momentum");
 const { Store } = require("./src/store");
 const { ComplianceAgent } = require("./src/complianceAgent");
 const { PaperTrader } = require("./src/paperTrader");
+const { classify } = require("./src/classifier");
 
 async function main() {
   console.log("╔══════════════════════════════════╗");
@@ -106,6 +107,11 @@ async function main() {
     if (token.summary) {
       evalResult.summary = token.summary;
     }
+    // 分类
+    var category = classify(token);
+    token.category = category;
+
+    console.log(`   分类: ${category}`);
     console.log(`   总分: ${evalResult.total}/40 · ${evalResult.action}`);
     if (evalResult.growth && evalResult.growth.score > 0) {
       console.log(`   涨幅潜力: ${evalResult.growth.score}/10 ${evalResult.growth.emoji}`);
@@ -211,7 +217,7 @@ async function main() {
     if (failReasons.length > 0) {
       console.log("   ⏭ 金狗过滤未通过:");
       failReasons.forEach(function(r) { console.log("      - " + r); });
-      paperTrader.record(token, evalResult, false);
+      paperTrader.record(token, evalResult, false, category);
       return;
     }
 
@@ -239,7 +245,7 @@ async function main() {
       console.log(`   ✅ 已推送`);
 
       // 10) 回测记录 + Rug Alarm
-      paperTrader.record(token, evalResult, true);
+      paperTrader.record(token, evalResult, true, category);
       startRugAlarm(token, devTracker);
     } catch (e) {
       console.error(`   ❌ 推送失败: ${e.message}`);
