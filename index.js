@@ -113,21 +113,6 @@ async function main() {
     // 保存到数据库（防止重启后重复推送）
     store.saveToken(token, evalResult, report?.holders);
 
-    // 4) AI 叙事增强
-    const aiNarrative = await narrator.generate(token, report, evalResult, report?.holders, devInfo);
-    if (aiNarrative) {
-      console.log("   🤖 AI 叙事生成成功");
-      // 用 AI 内容覆盖模板
-      if (aiNarrative.summary) evalResult.summary = aiNarrative.summary;
-      if (aiNarrative.highlights && aiNarrative.highlights.length > 0) evalResult.highlights = aiNarrative.highlights;
-      if (aiNarrative.warnings && aiNarrative.warnings.length > 0) evalResult.warnings = aiNarrative.warnings;
-      if (aiNarrative.action) evalResult.action = aiNarrative.action;
-      if (aiNarrative.rugDetail) evalResult.rugRisk.detail = aiNarrative.rugDetail;
-      if (aiNarrative.codeDetail) evalResult.codeQuality.detail = aiNarrative.codeDetail;
-      if (aiNarrative.innovDetail) evalResult.innovation.detail = aiNarrative.innovDetail;
-      if (aiNarrative.launchDetail) evalResult.launchQ.detail = aiNarrative.launchDetail;
-    }
-
     // 5) Compliance 风控检测（包发送 + 链上模拟卖出）
     // 异步非阻塞，5 秒超时兜底
     var complianceResult = null;
@@ -140,7 +125,7 @@ async function main() {
         if (complianceResult.bundledSupply && complianceResult.bundledSupply.isBundled) {
           console.log("   包发送检测: " + complianceResult.bundledSupply.detail);
         }
-        if (complianceResult.sellTest) {
+        if (complianceResult.sellTest && complianceResult.sellTest.detail) {
           console.log("   链上卖出测试: " + complianceResult.sellTest.detail);
         }
       }
@@ -231,12 +216,28 @@ async function main() {
 
     console.log("   🐕 金狗检测通过! 推送中...");
 
-    // 7) 推送钉钉
+    // 7) AI 叙事增强（只给金狗跑，省 token）
+    if (narrator.enabled) {
+      const aiNarrative = await narrator.generate(token, report, evalResult, report?.holders, devInfo);
+      if (aiNarrative) {
+        console.log("   🤖 AI 叙事生成成功");
+        if (aiNarrative.summary) evalResult.summary = aiNarrative.summary;
+        if (aiNarrative.highlights && aiNarrative.highlights.length > 0) evalResult.highlights = aiNarrative.highlights;
+        if (aiNarrative.warnings && aiNarrative.warnings.length > 0) evalResult.warnings = aiNarrative.warnings;
+        if (aiNarrative.action) evalResult.action = aiNarrative.action;
+        if (aiNarrative.rugDetail) evalResult.rugRisk.detail = aiNarrative.rugDetail;
+        if (aiNarrative.codeDetail) evalResult.codeQuality.detail = aiNarrative.codeDetail;
+        if (aiNarrative.innovDetail) evalResult.innovation.detail = aiNarrative.innovDetail;
+        if (aiNarrative.launchDetail) evalResult.launchQ.detail = aiNarrative.launchDetail;
+      }
+    }
+
+    // 8) 推送钉钉
     try {
       await notifier.push(token, report, evalResult);
       console.log(`   ✅ 已推送`);
 
-      // 8) 回测记录 + Rug Alarm
+      // 10) 回测记录 + Rug Alarm
       paperTrader.record(token, evalResult, true);
       startRugAlarm(token, devTracker);
     } catch (e) {
