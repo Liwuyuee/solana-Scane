@@ -18,12 +18,12 @@ class Store {
 
     this.db = new Database(DB_PATH);
     this.db.pragma("journal_mode = WAL");
-    this.#init();
+    this._init();
   }
 
   // ─── 建表 ───────────────────────────────────────────
 
-  #init() {
+  _init() {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tokens (
         mint TEXT PRIMARY KEY,
@@ -74,6 +74,11 @@ class Store {
         category TEXT DEFAULT ''
       );
     `);
+
+    // 兼容旧数据库：snapshots 表加 category 列（如果不存在）
+    try {
+      this.db.exec("ALTER TABLE snapshots ADD COLUMN category TEXT DEFAULT ''");
+    } catch (e) {}
   }
 
   // ─── 代币 ───────────────────────────────────────────

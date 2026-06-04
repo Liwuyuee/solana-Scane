@@ -51,32 +51,13 @@ class Notifier {
     // ─── Header ─────────────────────────────────────
     msg += "### " + totalEmoji + " 新币 · " + action + " · " + total + "/40\n\n";
 
-    // 分类标签
-    var cat = token.category || "";
-    if (cat) {
-      msg += "📂 `" + cat + "`  ";
-    }
-    msg += "✅ 已验证  ";
-    if (token.createTx) {
-      msg += "📦 `" + token.createTx.slice(0, 8) + "`";
-    }
-    msg += "\n\n";
-
     msg += "> " + summary + "\n\n";
 
     // ─── Token Info ────────────────────────────────
-    msg += "**📛 " + name + " (" + sym + ")**";
-    if (token.smartCount && token.smartCount > 0) {
-      msg += "  🧠 x" + token.smartCount;
-    }
-    msg += "  ✅ 已验证\n\n";
-    msg += "`" + mint + "`\n\n";
-    msg += "🪙 SOL / " + sym + "\n\n";
-    msg += "[Solscan](https://solscan.io/token/" + mint + ") · [Chart](https://dexscreener.com/solana/" + mint + ")";
-    if (token.createTx) {
-      msg += " · [创建Tx](https://solscan.io/tx/" + token.createTx + ")";
-    }
-    msg += "\n\n";
+    msg += "📛 " + name + " (" + sym + ")  ✅ 已验证\n";
+    msg += "  · [看代码](https://solscan.io/token/" + mint + ")  · [创建记录](https://solscan.io/tx/" + (token.createTx || mint) + ")\n\n";
+    msg += "🪙 SOL / " + sym + "\n";
+    msg += "`" + mint + "` · [token](https://solscan.io/token/" + mint + ") · [chart](https://dexscreener.com/solana/" + mint + ")\n\n";
 
     // ─── 社交链接 ────────────────────────────────
     var links = [];
@@ -87,19 +68,29 @@ class Notifier {
       msg += "**🔗 链接**\n" + links.join(" · ") + "\n\n";
     }
 
+    // ─── 分类 ────────────────────────────────────
+    var cat = token.category || "";
+    if (cat) {
+      msg += "📂 分类: " + cat;
+      if (token.catCount !== undefined) {
+        msg += "  ·  同类已见 " + token.catCount + " 次" + (token.catCount > 20 ? "  ⚠️ 已饱和" : "");
+      }
+      msg += "\n\n";
+    }
+
     // ─── Scores ────────────────────────────────────
-    msg += "**📊 Scores (out of 10)**\n\n";
-    msg += rug.emoji + " **" + rug.label + ":** " + rug.score + "/10";
-    if (rug.detail) msg += "\n> " + rug.detail;
+    msg += "**📊 四项评分（满分 10 分）**\n\n";
+    msg += rug.emoji + " " + rug.label + " " + rug.score + "/10";
+    if (rug.detail) msg += " — " + rug.detail;
     msg += "\n\n";
-    msg += code.emoji + " **" + code.label + ":** " + code.score + "/10";
-    if (code.detail) msg += "\n> " + code.detail;
+    msg += code.emoji + " " + code.label + " " + code.score + "/10";
+    if (code.detail) msg += " — " + code.detail;
     msg += "\n\n";
-    msg += innov.emoji + " **" + innov.label + ":** " + innov.score + "/10";
-    if (innov.detail) msg += "\n> " + innov.detail;
+    msg += innov.emoji + " " + innov.label + " " + innov.score + "/10";
+    if (innov.detail) msg += " — " + innov.detail;
     msg += "\n\n";
-    msg += launch.emoji + " **" + launch.label + ":** " + launch.score + "/10";
-    if (launch.detail) msg += "\n> " + launch.detail;
+    msg += launch.emoji + " " + launch.label + " " + launch.score + "/10";
+    if (launch.detail) msg += " — " + launch.detail;
     msg += "\n\n";
 
     // ─── Security ──────────────────────────────────
