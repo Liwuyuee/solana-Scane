@@ -6,11 +6,12 @@
  * Runs alongside the new token scanner.
  */
 const DEX_API = "https://api.dexscreener.com/latest/dex/search";
+const { apiFetch } = require("./fetch");
 
-// DexScreener 在中国访问较慢，设 25s 超时
+// 通过 Worker 中转 DexScreener
 const FETCH_TIMEOUT = 30000;
 function dexFetch(url) {
-  return fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  return apiFetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
 }
 
 class MomentumScanner {
