@@ -45,8 +45,8 @@ class SmartMoneyMonitor {
 
     // 异步自动发现聪明钱包（不阻塞启动）
     this.#refreshWallets();
-    // 每 24 小时刷新一次
-    setInterval(() => this.#refreshWallets(), 86400000);
+    // 每 12 小时刷新一次
+    setInterval(() => this.#refreshWallets(), 43200000);
   }
 
   /**
