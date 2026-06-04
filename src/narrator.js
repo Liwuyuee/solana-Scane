@@ -1,165 +1,130 @@
 /**
- * AI 叙事分析（可选）
+ * AI 叙事分析
  *
- * 如果配置了 ANTHROPIC_API_KEY，用 Claude 生成：
- * - 总结段落
- * - 亮点列表
- * - 风险列表
- * - 每项评分的详细解释
+ * 支持:
+ * - Anthropic Claude（默认，需 ANTHROPIC_API_KEY）
+ * - DeepSeek / 任何 OpenAI 兼容 API（需设置 AI_PROVIDER=openai + DEEPSEEK_API_KEY）
  *
- * 如果没配置，返回 null，走模板生成。
+ * 没配 key 时返回 null，走模板生成。
  */
-const Anthropic = require("@anthropic-ai/sdk");
+
+const DEEPSEEK_BASE = "https://api.deepseek.com";
 
 class Narrator {
   constructor() {
-    var key = process.env.ANTHROPIC_API_KEY || "";
-    this.enabled = !!key;
-    if (this.enabled) {
-      this.client = new Anthropic({ apiKey: key });
+    var anthropicKey = process.env.ANTHROPIC_API_KEY || "";
+    var deepseekKey = process.env.DEEPSEEK_API_KEY || "";
+    var provider = process.env.AI_PROVIDER || (deepseekKey ? "openai" : anthropicKey ? "anthropic" : "none");
+
+    this.enabled = provider !== "none";
+    this.provider = provider;
+
+    if (provider === "anthropic" && anthropicKey) {
+      var Anthropic = require("@anthropic-ai/sdk");
+      this.client = new Anthropic({ apiKey: anthropicKey });
+      this.model = process.env.AI_MODEL || "claude-sonnet-4-20250514";
+    } else if (provider === "openai" && deepseekKey) {
+      var OpenAI = require("openai");
+      this.client = new OpenAI({
+        apiKey: deepseekKey,
+        baseURL: process.env.AI_BASE_URL || DEEPSEEK_BASE,
+      });
+      this.model = process.env.AI_MODEL || "deepseek-chat";
     }
   }
 
-  /**
-   * 用 AI 生成叙事分析
-   * @param {object} token   代币信息
-   * @param {object} report  rugcheck 报告
-   * @param {object} scores  四项评分 { rugRisk, codeQuality, innovation, launchQ }
-   * @param {object} holders Holder 分析数据
-   * @param {object} devInfo 开发者信息
-   * @returns {object|null} { summary, highlights, warnings, action, rugDetail, codeDetail, innovDetail, launchDetail } 或 null
-   */
   async generate(token, report, scores, holders, devInfo) {
-    if (!this.enabled) return null;
+    if (!this.enabled || !this.client) return null;
+
+    var prompt = this.#buildPrompt(token, report, scores, holders, devInfo);
 
     try {
-      var prompt = this.#buildPrompt(token, report, scores, holders, devInfo);
-      var response = await this.client.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 2000,
-        system: "你是一个 Solana 链上代币分析专家。你收到一个刚被发现的新代币的分析数据，需要根据数据生成中文分析报告。分析要专业、客观、简洁。",
-        messages: [{ role: "user", content: prompt }],
-      });
-
-      var result = this.#parseResponse(response);
-      return result;
+      if (this.provider === "anthropic") {
+        return await this.#callClaude(prompt);
+      } else {
+        return await this.#callOpenAI(prompt);
+      }
     } catch (err) {
       console.warn("  AI 叙事生成失败: " + err.message);
       return null;
     }
   }
 
-  // ─── 构建 Prompt ───────────────────────────────────
-
-  #buildPrompt(token, report, scores, holders, devInfo) {
-    var s = scores || {};
-    var rug = s.rugRisk || {};
-    var code = s.codeQuality || {};
-    var innov = s.innovation || {};
-    var launch = s.launchQ || {};
-    var h = holders || {};
-    var dev = devInfo || {};
-    var r = report || {};
-
-    var lines = [];
-    lines.push("请根据以下代币分析数据，生成中文分析报告。");
-
-    lines.push("\n## 基本信息");
-    lines.push("- 名称: " + (token.name || "?") + " (" + (token.symbol || "?") + ")");
-    lines.push("- Mint 地址: " + (token.mint || "?"));
-    if (token.creator) lines.push("- 部署者: " + token.creator);
-    if (r.mintAuthority) lines.push("- Mint 权限: 未撤销（有增发风险）");
-    else lines.push("- Mint 权限: 已撤销（安全）");
-    if (r.freezeAuthority) lines.push("- Freeze 权限: 未撤销（有冻结风险）");
-    else lines.push("- Freeze 权限: 已撤销（安全）");
-    if (r.liquidity) lines.push("- 流动性: $" + Math.round(r.liquidity).toLocaleString());
-
-    lines.push("\n## 安全性（RugCheck）");
-    var risks = r.risks || [];
-    if (risks.length > 0) {
-      lines.push("检测到 " + risks.length + " 项风险：");
-      risks.slice(0, 8).forEach(function(ri) {
-        lines.push("- [" + ri.level + "] " + (ri.name || ""));
-      });
-    } else {
-      lines.push("未检测到明显风险项");
-    }
-
-    lines.push("\n## 四项评分");
-    lines.push("- 跑路风险: " + (rug.score || 0) + "/10 （越高越安全）");
-    lines.push("- 代码靠谱: " + (code.score || 0) + "/10");
-    lines.push("- 玩法新鲜: " + (innov.score || 0) + "/10");
-    lines.push("- 启动质量: " + (launch.score || 0) + "/10");
-
-    lines.push("\n## 持有者分布");
-    lines.push("- 总 Holder: " + (h.totalHolders || 0));
-    lines.push("- Top 10 占比: " + (h.top10Pct || 0) + "%");
-    lines.push("- 集中度: " + (h.risk || "未知"));
-
-    if (dev.tokensCreated > 0) {
-      lines.push("\n## 部署者信息");
-      lines.push("- 发币数量: " + dev.tokensCreated + " 个");
-      if (dev.ruggedCount > 0) lines.push("- Rug 记录: " + dev.ruggedCount + " 次");
-      lines.push("- 评价: " + (dev.risk || "未知"));
-    }
-
-    lines.push("\n## 要求");
-    lines.push("请生成以下内容（用中文）：");
-    lines.push("");
-    lines.push("1. 一个简短的总结段落（1-3句话，点评这个币的总体情况、亮点和风险，给出是否值得关注的意见）");
-    lines.push("2. 3-5 个亮点点（每点一句话）");
-    lines.push("3. 3-5 个风险点（每点一句话）");
-    lines.push("4. 一个操作建议词（从以下选：'建议回避'、'比较警惕'、'再观望观望'、'可以看看'、'金狗推荐'）");
-    lines.push("5. 跑路风险得分的详细解释（1-2句话，说明为什么给这个分）");
-    lines.push("6. 代码靠谱得分的详细解释");
-    lines.push("7. 玩法新鲜得分的详细解释");
-    lines.push("8. 启动质量得分的详细解释");
-    lines.push("");
-    lines.push("请以 JSON 格式输出，格式如下：");
-    lines.push('{');
-    lines.push('  "summary": "总结段落",');
-    lines.push('  "highlights": ["亮点1", "亮点2", ...],');
-    lines.push('  "warnings": ["风险1", "风险2", ...],');
-    lines.push('  "action": "建议回避|比较警惕|再观望观望|可以看看|金狗推荐",');
-    lines.push('  "rugDetail": "解释",');
-    lines.push('  "codeDetail": "解释",');
-    lines.push('  "innovDetail": "解释",');
-    lines.push('  "launchDetail": "解释"');
-    lines.push('}');
-
-    return lines.join("\n");
+  async #callClaude(prompt) {
+    var res = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 800,
+      temperature: 0.7,
+      messages: [{ role: "user", content: prompt }],
+    });
+    var text = res.content[0].text;
+    return this.#parseResponse(text);
   }
 
-  // ─── 解析响应 ──────────────────────────────────────
+  async #callOpenAI(prompt) {
+    var res = await this.client.chat.completions.create({
+      model: this.model,
+      max_tokens: 800,
+      temperature: 0.7,
+      messages: [{ role: "user", content: prompt }],
+    });
+    var text = res.choices[0].message.content;
+    return this.#parseResponse(text);
+  }
 
-  #parseResponse(response) {
-    var text = "";
-    for (var i = 0; i < response.content.length; i++) {
-      var block = response.content[i];
-      if (block.type === "text") {
-        text += block.text;
-      }
-    }
+  #buildPrompt(token, report, scores, holders, dev) {
+    var h = holders || {};
+    var d = dev || {};
 
-    // 提取 JSON
-    var jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      console.warn("  AI 返回格式异常，使用模板");
-      return null;
-    }
+    return `你是一个专业的 Solana 链上分析师，用中文分析这个代币。
 
+代币信息:
+- 名称: ${token.name || "?"}
+- 符号: ${token.symbol || "?"}
+- Mint: ${token.mint || "?"}
+- 创建者: ${token.creator ? token.creator.slice(0, 8) + "..." : "未知"}
+- 来源: ${token.source || "?"}
+
+安全评分 (RugCheck): ${report.safeScore || 0}/100
+Mint 权限: ${report.mintAuthority ? "❌ 未撤销" : "✅ 已撤销"}
+Freeze 权限: ${report.freezeAuthority ? "❌ 未撤销" : "✅ 已撤销"}
+风险项: ${(report.risks || []).length} 项
+
+四项评分:
+- 跑路风险: ${scores.rugRisk.score}/10 - ${scores.rugRisk.detail || ""}
+- 代码靠谱: ${scores.codeQuality.score}/10 - ${scores.codeQuality.detail || ""}
+- 玩法新鲜: ${scores.innovation.score}/10 - ${scores.innovation.detail || ""}
+- 启动质量: ${scores.launchQ.score}/10 - ${scores.launchQ.detail || ""}
+
+Holder 分析:
+- 总持有者: ${h.totalHolders || 0}
+- Top10 占比: ${h.top10Pct || 0}%
+
+开发者信息:
+- 创建代币数: ${d.tokensCreated || 0}
+- Rug 次数: ${d.ruggedCount || 0}
+- 风险评级: ${d.risk || "未知"}
+
+涨幅潜力: ${scores.growth.score || 0}/10 (${scores.growth.stars || 0}/5 星)
+
+请返回 JSON 格式（不要 markdown 包裹）:
+{
+  "summary": "一句话总结（30字以内），含买入/观望/回避建议",
+  "highlights": ["亮点1", "亮点2", "亮点3"],
+  "warnings": ["风险1", "风险2", "风险3"],
+  "action": "金狗推荐 / 可以看看 / 再观望观望 / 建议回避",
+  "rugDetail": "跑路风险详细分析（50字以内）",
+  "codeDetail": "代码质量分析（50字以内）",
+  "innovDetail": "玩法创新分析（50字以内）",
+  "launchDetail": "启动质量分析（50字以内）"
+}`;
+  }
+
+  #parseResponse(text) {
     try {
-      var data = JSON.parse(jsonMatch[0]);
-      return {
-        summary: data.summary || "",
-        highlights: Array.isArray(data.highlights) ? data.highlights : [],
-        warnings: Array.isArray(data.warnings) ? data.warnings : [],
-        action: data.action || "",
-        rugDetail: data.rugDetail || "",
-        codeDetail: data.codeDetail || "",
-        innovDetail: data.innovDetail || "",
-        launchDetail: data.launchDetail || "",
-      };
+      // 去掉可能的 markdown 包裹
+      var cleaned = text.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "").trim();
+      return JSON.parse(cleaned);
     } catch (e) {
       console.warn("  AI JSON 解析失败: " + e.message);
       return null;

@@ -45,7 +45,8 @@ async function main() {
   const compliance = new ComplianceAgent();
 
   if (narrator.enabled) {
-    console.log("🤖 AI 叙事: 已启用（Claude）");
+    var aiName = process.env.AI_PROVIDER === "openai" ? "DeepSeek" : "Claude";
+    console.log("🤖 AI 叙事: 已启用（" + aiName + "）");
   } else {
     console.log("🤖 AI 叙事: 未启用（使用模板）");
   }
