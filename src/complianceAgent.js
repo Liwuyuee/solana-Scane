@@ -130,38 +130,27 @@ class ComplianceAgent {
     }
 
     try {
-      var { Connection, PublicKey } = require("@solana/web3.js");
+      // 用 rpcCall 替代 @solana/web3.js Connection（避免 429 重试日志刷屏）
+      var largestAccounts = await rpcCall("getTokenLargestAccounts", [mint]);
+      if (!largestAccounts || !largestAccounts.value || largestAccounts.value.length === 0) {
+        return { sellable: true };
+      }
 
-      var rpcUrl = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
-      var connection = new Connection(rpcUrl, "confirmed");
-
-      // 1) 查持仓分布：大户过于集中 = 高风险
-      var largestAccounts = await connection.getTokenLargestAccounts(new PublicKey(mint));
-      if (largestAccounts && largestAccounts.value.length > 0) {
-        var top1Pct = largestAccounts.value[0].uiAmount || 0;
-        var total = largestAccounts.value.reduce(function(s, a) { return s + (a.uiAmount || 0); }, 0);
-        if (total > 0) {
-          var top1Share = top1Pct / total * 100;
-          if (top1Share > 80) {
-            var result = { sellable: false, detail: "第一大持仓占 " + top1Share.toFixed(1) + "%，筹码极端集中" };
-            this.cache[mint] = { simulated: result, timestamp: Date.now() };
-            return result;
-          }
+      var top1Pct = largestAccounts.value[0].uiAmount || 0;
+      var total = largestAccounts.value.reduce(function(s, a) { return s + (a.uiAmount || 0); }, 0);
+      if (total > 0) {
+        var top1Share = top1Pct / total * 100;
+        if (top1Share > 80) {
+          return { sellable: false, detail: "第一大持仓占 " + top1Share.toFixed(1) + "%，筹码极端集中" };
         }
       }
 
-      // 2) 查总持仓账户数：太少 = 无人问津
-      if (largestAccounts && largestAccounts.value.length < 3) {
-        var result = { sellable: false, detail: "持仓账户少于 3 个，流动性极差" };
-        this.cache[mint] = { simulated: result, timestamp: Date.now() };
-        return result;
+      if (largestAccounts.value.length < 3) {
+        return { sellable: false, detail: "持仓账户少于 3 个，流动性极差" };
       }
 
-      var result = { sellable: true, detail: "链上持仓分布正常" };
-      this.cache[mint] = { simulated: result, timestamp: Date.now() };
-      return result;
+      return { sellable: true };
     } catch (e) {
-      // 检测过程异常，跳过
       return { sellable: true, networkError: true };
     }
   }
