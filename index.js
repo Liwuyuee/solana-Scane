@@ -63,10 +63,7 @@ async function main() {
     processToken(token);
   });
   smartMoney.start();
-  // 延迟 5 秒等自动发现完成后再显示准确数量
-  setTimeout(function() {
-    console.log("🧠 聪明钱钱包: " + smartMoney.wallets.length + " 个（含自动发现）");
-  }, 5000);
+  // 聪明钱包数量由 #refreshWallets 完成后自动打印
 
   // 动量异动监控（FDV > $200K 的币检测放量异动）
   const momentumScanner = new MomentumScanner(monitor.seen);

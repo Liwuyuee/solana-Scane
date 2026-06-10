@@ -9,6 +9,10 @@
 const PUMPFUN = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const { apiFetch } = require("./fetch");
 const { rpcCall } = require("./rpc");
+const fs = require("fs");
+const path = require("path");
+
+const EXTRA_WALLETS_FILE = path.join(__dirname, "..", "data", "extra-wallets.json");
 
 // Known profitable wallets (source: public on-chain data)
 // These wallets have verified >$100K profit on Pump.fun
@@ -37,6 +41,17 @@ const KNOWN_WALLETS = [
 class SmartMoneyMonitor {
   constructor(seenMints) {
     this.wallets = KNOWN_WALLETS.slice();  // 硬编码钱包作为基础
+    // 加载之前自动发现的额外钱包
+    try {
+      if (fs.existsSync(EXTRA_WALLETS_FILE)) {
+        var extra = JSON.parse(fs.readFileSync(EXTRA_WALLETS_FILE, "utf8"));
+        if (Array.isArray(extra)) {
+          for (var i = 0; i < extra.length; i++) {
+            if (this.wallets.indexOf(extra[i]) < 0) this.wallets.push(extra[i]);
+          }
+        }
+      }
+    } catch (e) {}
     this.seenMints = seenMints;      // reference to main monitor's seen set
     this.seenSigs = new Set();        // sigs we already processed per wallet
     this.tokenWallets = {};           // mint -> [wallet addresses]
@@ -44,7 +59,9 @@ class SmartMoneyMonitor {
     this.interval = null;
 
     // 异步自动发现聪明钱包（不阻塞启动）
-    this.#refreshWallets();
+    this.#refreshWallets(function(count) {
+      console.log("🧠 聪明钱钱包: " + count + " 个（含自动发现）");
+    });
     // 每 12 小时刷新一次
     setInterval(() => this.#refreshWallets(), 43200000);
   }
@@ -57,43 +74,36 @@ class SmartMoneyMonitor {
    *
    * 不用外部 API，纯链上数据。
    */
-  async #refreshWallets() {
+  async #refreshWallets(callback) {
     try {
-      // 取最近 30 条 Pump.fun 签名
-      var sigs = await rpcCall("getSignaturesForAddress", [PUMPFUN, { limit: 30 }]);
-      if (!sigs || sigs.length === 0) return;
+      // 只查前 5 条签名避免阻塞太久
+      var sigs = await rpcCall("getSignaturesForAddress", [PUMPFUN, { limit: 5 }]);
+      if (!sigs || sigs.length === 0) throw new Error("no sigs");
 
-      // 提取所有钱包地址（交易发起者 = fee payer）
+      // 并行查交易，每组 5 个
       var buyerCounts = {};
       var seen = new Set(this.wallets);
 
-      for (var i = 0; i < sigs.length; i++) {
-        try {
-          var tx = await rpcCall("getTransaction", [sigs[i].signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
-          if (!tx || !tx.meta) continue;
+      var txResults = await Promise.all(sigs.map(function(s) {
+        return rpcCall("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
+      }));
 
-          // 检查是否是 Pump.fun 交易
-          var logs = tx.meta.logMessages || [];
-          var touchesPump = logs.some(function(l) { return l.indexOf("Program log: Instruction") >= 0; });
-          if (!touchesPump) continue;
+      for (var i = 0; i < txResults.length; i++) {
+        var tx = txResults[i];
+        if (!tx || !tx.meta) continue;
 
-          // 找 fee payer（出 gas 的钱包 = 发起交易的钱包）
-          var accountKeys = tx.transaction?.message?.accountKeys || [];
-          var buyer = accountKeys[0]?.pubkey || "";
-          if (!buyer || buyer.length < 30) continue;
+        var accountKeys = tx.transaction?.message?.accountKeys || [];
+        var buyer = accountKeys[0]?.pubkey || "";
+        if (!buyer || buyer.length < 30 || buyer === PUMPFUN) continue;
 
-          // 忽略已知的 Pump.fun 程序地址
-          if (buyer === PUMPFUN) continue;
-
-          if (!buyerCounts[buyer]) buyerCounts[buyer] = 0;
-          buyerCounts[buyer]++;
-        } catch (e) {}
+        if (!buyerCounts[buyer]) buyerCounts[buyer] = 0;
+        buyerCounts[buyer]++;
       }
 
-      // 出现 3 次以上的钱包可能是聪明钱（活跃交易者）
+      // 出现 2 次以上的钱包加进来
       var added = 0;
       for (var wallet in buyerCounts) {
-        if (buyerCounts[wallet] >= 3 && !seen.has(wallet)) {
+        if (buyerCounts[wallet] >= 2 && !seen.has(wallet)) {
           this.wallets.push(wallet);
           seen.add(wallet);
           added++;
@@ -101,11 +111,14 @@ class SmartMoneyMonitor {
       }
 
       if (added > 0) {
+        try {
+          var extra = this.wallets.slice(KNOWN_WALLETS.length);
+          fs.writeFileSync(EXTRA_WALLETS_FILE, JSON.stringify(extra, null, 2));
+        } catch (e) {}
         console.log("🧠 聪明钱自动发现: 新增 " + added + " 个钱包（共 " + this.wallets.length + " 个）");
       }
-    } catch (e) {
-      // API 失败不影响运行，继续用已有钱包列表
-    }
+    } catch (e) {}
+    if (typeof callback === "function") callback(this.wallets.length);
   }
 
   /** Register callback for smart money buy alert */
