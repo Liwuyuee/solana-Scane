@@ -44,11 +44,18 @@ class Analyzer {
    * @param {object} devInfo  devTracker.record() 返回值
    * @returns {{ total, rugRisk, codeQuality, innovation, launchQ, summary, highlights, warnings }}
    */
-  evaluate(report, devInfo, dexInfo) {
+  evaluate(report, devInfo, dexInfo, socials) {
     if (!report) return this.#emptyEval();
 
     const holders = report.holders || {};
-    const four = this.#calcScores(report, holders, devInfo);
+    // 社交评分：有 Twitter +1，官网 +1，TG +0.5
+    var socialBonus = 0;
+    if (socials) {
+      if (socials.twitter) socialBonus += 1;
+      if (socials.website) socialBonus += 1;
+      if (socials.telegram) socialBonus += 0.5;
+    }
+    const four = this.#calcScores(report, holders, devInfo, socialBonus);
     const honeypot = this.#checkHoneypot(report, dexInfo);
     const growth = this.#calcGrowth(dexInfo, holders);
     const narrative = this.#buildNarrative(report, four, holders, devInfo, honeypot);
@@ -70,7 +77,8 @@ class Analyzer {
 
   // ─── 四项评分计算 ──────────────────────────────────
 
-  #calcScores(report, holders, dev) {
+  #calcScores(report, holders, dev, socialBonus) {
+    socialBonus = socialBonus || 0;
     // 1) 跑路风险 ──────────────────────────────────────
     let rug = 10;
     const dangerCount = report.dangers?.length || 0;
@@ -109,6 +117,9 @@ class Analyzer {
     // 流动性：有交易基础
     if (report.liquidity > 500000) innovation += 1;
     else if (report.liquidity > 100000) innovation += 0.5;
+
+    // 社交加分：有 Twitter/官网/TG 说明项目方有投入
+    innovation += socialBonus;
 
     innovation = Math.max(1, Math.min(10, Math.round(innovation)));
 

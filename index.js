@@ -102,7 +102,7 @@ async function main() {
     }
 
     // 3) 四项评分 + 涨幅潜力 + 叙事生成
-    const evalResult = analyzer.evaluate(report, devInfo, token.dexInfo);
+    const evalResult = analyzer.evaluate(report, devInfo, token.dexInfo, token.socials);
     // Use momentum scanner's one-line summary if available
     if (token.summary) {
       evalResult.summary = token.summary;

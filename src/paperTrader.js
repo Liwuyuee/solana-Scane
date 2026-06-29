@@ -74,7 +74,7 @@ class PaperTrader {
 
   /** 获取当前价格 */
   async #fetchPrice(mint) {
-    // 1) Jupiter Price API（最快）
+    // 1) Jupiter Price API
     try {
       var res = await apiFetch(JUPITER_PRICE + mint, { signal: AbortSignal.timeout(8000) });
       if (res.ok) {
@@ -84,10 +84,18 @@ class PaperTrader {
       }
     } catch (e) {}
 
-    // 2) DexScreener 兜底（在中国可能超时）
+    // 2) Birdeye 备用
     try {
-      var res = await // Use apiFetch for blocked domains
-      apiFetch("https://api.dexscreener.com/latest/dex/search/?q=" + mint, { signal: AbortSignal.timeout(15000) });
+      var res = await apiFetch("https://public-api.birdeye.so/public/price?address=" + mint, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        var data = await res.json();
+        if (data.success && data.data?.value) return parseFloat(data.data.value);
+      }
+    } catch (e) {}
+
+    // 3) DexScreener 兜底
+    try {
+      var res = await apiFetch("https://api.dexscreener.com/latest/dex/search/?q=" + mint, { signal: AbortSignal.timeout(15000) });
       if (res.ok) {
         var data = await res.json();
         var pair = (data.pairs || []).find(function(p) { return p.chainId === "solana"; });
