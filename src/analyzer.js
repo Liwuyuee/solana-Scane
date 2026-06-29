@@ -92,14 +92,25 @@ class Analyzer {
     if (report.rugged) code = 1;
     code = Math.max(1, Math.min(10, code));
 
-    // 3) 玩法新鲜 ──────────────────────────────────────
-    let innovation = 6;  // 默认中等
-    if (holders.totalHolders > 100) innovation += 1;
+    // 3) 社交流量 ──────────────────────────────────────
+    // 衡量社区热度和市场关注度
+    let innovation = 5;  // 默认中等偏低
+
+    // 持有者数量：社区基础
+    if (holders.totalHolders > 500) innovation += 3;
+    else if (holders.totalHolders > 100) innovation += 2;
+    else if (holders.totalHolders > 50) innovation += 1;
     else if (holders.totalHolders < 10) innovation -= 1;
-    if (report.liquidity > 100000) innovation += 1;
-    // 有社交媒体加分
-    // 默认居中偏右，不全新也不完全抄袭
-    innovation = Math.max(1, Math.min(10, innovation));
+
+    // 筹码分散度：Top10 < 50% = 社区健康
+    if (holders.top10Pct > 0 && holders.top10Pct < 50) innovation += 1;
+    else if (holders.top10Pct > 90) innovation -= 1;
+
+    // 流动性：有交易基础
+    if (report.liquidity > 500000) innovation += 1;
+    else if (report.liquidity > 100000) innovation += 0.5;
+
+    innovation = Math.max(1, Math.min(10, Math.round(innovation)));
 
     // 4) 启动质量 ──────────────────────────────────────
     let launch = 6;
@@ -164,7 +175,7 @@ class Analyzer {
       score += 1; signals.push("近1h成交量 $" + Math.round(vol1h).toLocaleString() + "，有交易热度");
     }
 
-    // 4) 买卖比
+    // 4) 买卖比 + 社区热度
     var txns = dexInfo.txns24h;
     if (txns) {
       var buys = txns.buys || 0;
@@ -177,6 +188,10 @@ class Analyzer {
         else if (buyRatio >= 0.3) { signals.push("买入 " + Math.round(buyRatio * 100) + "% / 卖出 " + Math.round((1 - buyRatio) * 100) + "%，买卖均衡"); }
         else                      { score -= 2; signals.push("卖出占比 " + Math.round((1 - buyRatio) * 100) + "%，抛压严重"); }
       }
+      // 社区热度：24h 总交易笔数 > 500 = 活跃社区
+      if (total > 1000)      { score += 2; signals.push("24h " + total + " 笔交易，社区极度活跃"); }
+      else if (total > 500)  { score += 1; signals.push("24h " + total + " 笔交易，交易活跃"); }
+      else if (total > 100)  { signals.push("24h " + total + " 笔交易，有一定热度"); }
     }
 
     // 5) Holder 基础
