@@ -48,7 +48,8 @@ class MomentumScanner {
         var addr = b.tokenAddress;
         if (!addr) continue;
         if (this.seenMomentum.has(addr)) continue;
-        if (this.seen && this.seen.has(addr)) continue; // already scanned before
+        // 即使之前扫过，但 FDV > $200K 的动量币值得重新评估
+        // （跳过已在 seenMomentum 的，避免重复推送）
 
         // Get full pair data for FDV check
         var pair = await this._fetchPair(addr);
