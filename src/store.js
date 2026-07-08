@@ -63,22 +63,24 @@ class Store {
         detected_at TEXT DEFAULT (datetime('now')),
         price_initial REAL DEFAULT 0,
         price_1h REAL DEFAULT 0,
+        price_3h REAL DEFAULT 0,
         price_6h REAL DEFAULT 0,
         price_24h REAL DEFAULT 0,
         score INTEGER DEFAULT 0,
         action TEXT,
         passed_filter INTEGER DEFAULT 0,
         checked_1h INTEGER DEFAULT 0,
+        checked_3h INTEGER DEFAULT 0,
         checked_6h INTEGER DEFAULT 0,
         checked_24h INTEGER DEFAULT 0,
         category TEXT DEFAULT ''
       );
     `);
 
-    // 兼容旧数据库：snapshots 表加 category 列（如果不存在）
-    try {
-      this.db.exec("ALTER TABLE snapshots ADD COLUMN category TEXT DEFAULT ''");
-    } catch (e) {}
+    // 兼容旧数据库
+    try { this.db.exec("ALTER TABLE snapshots ADD COLUMN category TEXT DEFAULT ''"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE snapshots ADD COLUMN price_3h REAL DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE snapshots ADD COLUMN checked_3h INTEGER DEFAULT 0"); } catch (e) {}
   }
 
   // ─── 代币 ───────────────────────────────────────────
@@ -181,8 +183,8 @@ class Store {
   /** 创建初始快照 */
   saveSnapshot(mint, name, symbol, priceInitial, score, action, passed, category) {
     this.db.prepare(`
-      INSERT INTO snapshots (mint, name, symbol, price_initial, price_1h, price_6h, price_24h, score, action, passed_filter, checked_1h, checked_6h, checked_24h, category)
-      VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, 0, 0, ?)
+      INSERT INTO snapshots (mint, name, symbol, price_initial, price_1h, price_3h, price_6h, price_24h, score, action, passed_filter, checked_1h, checked_3h, checked_6h, checked_24h, category)
+      VALUES (?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, 0, 0, 0, 0, ?)
       ON CONFLICT(mint) DO NOTHING
     `).run(mint, name || "", symbol || "", priceInitial || 0, score || 0, action || "", passed ? 1 : 0, category || "");
   }
@@ -205,6 +207,7 @@ class Store {
   updateSnapshotPrice(mint, field, price) {
     var sql = (field === "initial") ? "UPDATE snapshots SET price_initial = ? WHERE mint = ?" :
               (field === "1h") ? "UPDATE snapshots SET price_1h = ?, checked_1h = 1 WHERE mint = ?" :
+              (field === "3h") ? "UPDATE snapshots SET price_3h = ?, checked_3h = 1 WHERE mint = ?" :
               (field === "6h") ? "UPDATE snapshots SET price_6h = ?, checked_6h = 1 WHERE mint = ?" :
               (field === "24h") ? "UPDATE snapshots SET price_24h = ?, checked_24h = 1 WHERE mint = ?" : null;
     if (!sql) return;
@@ -214,6 +217,7 @@ class Store {
   /** 检查某个时间点是否已记录 */
   isSnapshotChecked(mint, field) {
     var col = (field === "1h") ? "checked_1h" :
+              (field === "3h") ? "checked_3h" :
               (field === "6h") ? "checked_6h" :
               (field === "24h") ? "checked_24h" : null;
     if (!col) return false;
