@@ -93,6 +93,12 @@ class Notifier {
     if (launch.detail) msg += " — " + launch.detail;
     msg += "\n\n";
 
+    // ─── 社区热度 ──────────────────────────────────
+    var cs = ev && ev.communityScore;
+    if (cs && cs > 0) {
+      msg += "➕ **社区热度 +" + cs + "**（不计入总分）\n\n";
+    }
+
     // ─── Security ──────────────────────────────────
     msg += "**🛡️ Security**\n\n";
     msg += "- Mint: " + (report && report.mintAuthority ? "❌ Not revoked" : "✅ Revoked") + "\n";

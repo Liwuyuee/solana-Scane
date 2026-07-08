@@ -53,6 +53,18 @@ class Analyzer {
     const growth = this.#calcGrowth(dexInfo, holders);
     const narrative = this.#buildNarrative(report, four, holders, devInfo, honeypot);
 
+    // 社区热度（单独计算，不加入总分）
+    var communityScore = 0;
+    if (holders.totalHolders > 500) communityScore += 2;
+    else if (holders.totalHolders > 100) communityScore += 1;
+    if (holders.top10Pct > 0 && holders.top10Pct < 50) communityScore += 1;
+    if (dexInfo && dexInfo.txns24h) {
+      var totalTx = (dexInfo.txns24h.buys || 0) + (dexInfo.txns24h.sells || 0);
+      if (totalTx > 1000) communityScore += 2;
+      else if (totalTx > 500) communityScore += 1;
+    }
+    communityScore = Math.min(5, communityScore);
+
     return {
       total: four.rugRisk.score + four.codeQuality.score + four.innovation.score + four.launchQ.score,
       rugRisk: four.rugRisk,
@@ -61,6 +73,7 @@ class Analyzer {
       launchQ: four.launchQ,
       growth: growth,
       honeypot: honeypot,
+      communityScore: communityScore,
       summary: narrative.summary,
       highlights: narrative.highlights,
       warnings: narrative.warnings,
