@@ -44,18 +44,11 @@ class Analyzer {
    * @param {object} devInfo  devTracker.record() 返回值
    * @returns {{ total, rugRisk, codeQuality, innovation, launchQ, summary, highlights, warnings }}
    */
-  evaluate(report, devInfo, dexInfo, socials) {
+  evaluate(report, devInfo, dexInfo) {
     if (!report) return this.#emptyEval();
 
     const holders = report.holders || {};
-    // 社交评分：有 Twitter +1，官网 +1，TG +0.5
-    var socialBonus = 0;
-    if (socials) {
-      if (socials.twitter) socialBonus += 1;
-      if (socials.website) socialBonus += 1;
-      if (socials.telegram) socialBonus += 0.5;
-    }
-    const four = this.#calcScores(report, holders, devInfo, socialBonus);
+    const four = this.#calcScores(report, holders, devInfo);
     const honeypot = this.#checkHoneypot(report, dexInfo);
     const growth = this.#calcGrowth(dexInfo, holders);
     const narrative = this.#buildNarrative(report, four, holders, devInfo, honeypot);
@@ -77,8 +70,7 @@ class Analyzer {
 
   // ─── 四项评分计算 ──────────────────────────────────
 
-  #calcScores(report, holders, dev, socialBonus) {
-    socialBonus = socialBonus || 0;
+  #calcScores(report, holders, dev) {
     // 1) 跑路风险 ──────────────────────────────────────
     let rug = 10;
     const dangerCount = report.dangers?.length || 0;
@@ -100,28 +92,12 @@ class Analyzer {
     if (report.rugged) code = 1;
     code = Math.max(1, Math.min(10, code));
 
-    // 3) 社交流量 ──────────────────────────────────────
-    // 衡量社区热度和市场关注度
-    let innovation = 5;  // 默认中等偏低
-
-    // 持有者数量：社区基础
-    if (holders.totalHolders > 500) innovation += 3;
-    else if (holders.totalHolders > 100) innovation += 2;
-    else if (holders.totalHolders > 50) innovation += 1;
+    // 3) 玩法新鲜 ──────────────────────────────────────
+    let innovation = 6;  // 默认中等
+    if (holders.totalHolders > 100) innovation += 1;
     else if (holders.totalHolders < 10) innovation -= 1;
-
-    // 筹码分散度：Top10 < 50% = 社区健康
-    if (holders.top10Pct > 0 && holders.top10Pct < 50) innovation += 1;
-    else if (holders.top10Pct > 90) innovation -= 1;
-
-    // 流动性：有交易基础
-    if (report.liquidity > 500000) innovation += 1;
-    else if (report.liquidity > 100000) innovation += 0.5;
-
-    // 社交加分：有 Twitter/官网/TG 说明项目方有投入
-    innovation += socialBonus;
-
-    innovation = Math.max(1, Math.min(10, Math.round(innovation)));
+    if (report.liquidity > 100000) innovation += 1;
+    innovation = Math.max(1, Math.min(10, innovation));
 
     // 4) 启动质量 ──────────────────────────────────────
     let launch = 6;
