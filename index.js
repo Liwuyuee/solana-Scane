@@ -6,14 +6,22 @@ const path = require("path");
 const LOCK_FILE = path.join(__dirname, "data", "bot.lock");
 try {
   if (fs.existsSync(LOCK_FILE)) {
-    var oldPid = parseInt(fs.readFileSync(LOCK_FILE, "utf8"), 10);
-    try {
-      process.kill(oldPid, 0); // 检查进程是否存在
-      console.log("⚠️ 已有 bot 在运行（PID " + oldPid + "），退出");
-      process.exit(0);
-    } catch (e) { /* 旧进程已死，继续 */ }
+    var lockContent = fs.readFileSync(LOCK_FILE, "utf8").trim();
+    var parts = lockContent.split("\n");
+    var oldPid = parseInt(parts[0], 10);
+    var oldTime = parseInt(parts[1] || "0", 10);
+    var isStale = (Date.now() - oldTime) > 86400000; // 超过 24 小时视为过期
+
+    if (!isStale) {
+      try {
+        process.kill(oldPid, 0); // 检查进程是否存在
+        console.log("⚠️ 已有 bot 在运行（PID " + oldPid + "），退出");
+        process.exit(0);
+      } catch (e) { /* 旧进程已死，继续 */ }
+    }
   }
-  fs.writeFileSync(LOCK_FILE, String(process.pid));
+  // 写入当前 PID + 时间戳
+  fs.writeFileSync(LOCK_FILE, process.pid + "\n" + Date.now());
   // 进程退出时清理锁
   process.on("exit", function() { try { fs.unlinkSync(LOCK_FILE); } catch(e) {} });
 } catch (e) {}
