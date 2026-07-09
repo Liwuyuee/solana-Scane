@@ -10,15 +10,18 @@ try {
     var parts = lockContent.split("\n");
     var oldPid = parseInt(parts[0], 10);
     var oldTime = parseInt(parts[1] || "0", 10);
-    var isStale = (Date.now() - oldTime) > 86400000; // 超过 24 小时视为过期
+    var isStale = (Date.now() - oldTime) > 300000; // 超过 5 分钟视为过期（防止异常退出后锁没清理）
 
-    if (!isStale) {
-      try {
-        process.kill(oldPid, 0); // 检查进程是否存在
+    // 检查旧进程是否还活着
+    try {
+      process.kill(oldPid, 0);
+      if (!isStale) {
         console.log("⚠️ 已有 bot 在运行（PID " + oldPid + "），退出");
         process.exit(0);
-      } catch (e) { /* 旧进程已死，继续 */ }
-    }
+      }
+      // 超过 5 分钟强制清理
+      console.log("⚠️ 旧锁过期（PID " + oldPid + "），覆盖");
+    } catch (e) { /* 旧进程已死，覆盖锁 */ }
   }
   // 写入当前 PID + 时间戳
   fs.writeFileSync(LOCK_FILE, process.pid + "\n" + Date.now());
