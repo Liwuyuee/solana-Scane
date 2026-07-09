@@ -62,6 +62,7 @@ class Store {
         symbol TEXT,
         detected_at TEXT DEFAULT (datetime('now')),
         price_initial REAL DEFAULT 0,
+        price_15m REAL DEFAULT 0, price_30m REAL DEFAULT 0,
         price_1h REAL DEFAULT 0,
         price_3h REAL DEFAULT 0,
         price_6h REAL DEFAULT 0,
@@ -69,6 +70,7 @@ class Store {
         score INTEGER DEFAULT 0,
         action TEXT,
         passed_filter INTEGER DEFAULT 0,
+        checked_15m INTEGER DEFAULT 0, checked_30m INTEGER DEFAULT 0,
         checked_1h INTEGER DEFAULT 0,
         checked_3h INTEGER DEFAULT 0,
         checked_6h INTEGER DEFAULT 0,
@@ -81,6 +83,10 @@ class Store {
     try { this.db.exec("ALTER TABLE snapshots ADD COLUMN category TEXT DEFAULT ''"); } catch (e) {}
     try { this.db.exec("ALTER TABLE snapshots ADD COLUMN price_3h REAL DEFAULT 0"); } catch (e) {}
     try { this.db.exec("ALTER TABLE snapshots ADD COLUMN checked_3h INTEGER DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE snapshots ADD COLUMN price_15m REAL DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE snapshots ADD COLUMN checked_15m INTEGER DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE snapshots ADD COLUMN price_30m REAL DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE snapshots ADD COLUMN checked_30m INTEGER DEFAULT 0"); } catch (e) {}
   }
 
   // ─── 代币 ───────────────────────────────────────────
@@ -183,8 +189,8 @@ class Store {
   /** 创建初始快照 */
   saveSnapshot(mint, name, symbol, priceInitial, score, action, passed, category) {
     this.db.prepare(`
-      INSERT INTO snapshots (mint, name, symbol, price_initial, price_1h, price_3h, price_6h, price_24h, score, action, passed_filter, checked_1h, checked_3h, checked_6h, checked_24h, category)
-      VALUES (?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, 0, 0, 0, 0, ?)
+      INSERT INTO snapshots (mint, name, symbol, price_initial, price_15m, price_30m, price_1h, price_3h, price_6h, price_24h, score, action, passed_filter, checked_15m, checked_30m, checked_1h, checked_3h, checked_6h, checked_24h, category)
+      VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?)
       ON CONFLICT(mint) DO NOTHING
     `).run(mint, name || "", symbol || "", priceInitial || 0, score || 0, action || "", passed ? 1 : 0, category || "");
   }
@@ -206,6 +212,8 @@ class Store {
   /** 更新某个时间点的价格 + 标记已检查 */
   updateSnapshotPrice(mint, field, price) {
     var sql = (field === "initial") ? "UPDATE snapshots SET price_initial = ? WHERE mint = ?" :
+              (field === "15m") ? "UPDATE snapshots SET price_15m = ?, checked_15m = 1 WHERE mint = ?" :
+              (field === "30m") ? "UPDATE snapshots SET price_30m = ?, checked_30m = 1 WHERE mint = ?" :
               (field === "1h") ? "UPDATE snapshots SET price_1h = ?, checked_1h = 1 WHERE mint = ?" :
               (field === "3h") ? "UPDATE snapshots SET price_3h = ?, checked_3h = 1 WHERE mint = ?" :
               (field === "6h") ? "UPDATE snapshots SET price_6h = ?, checked_6h = 1 WHERE mint = ?" :
@@ -216,7 +224,9 @@ class Store {
 
   /** 检查某个时间点是否已记录 */
   isSnapshotChecked(mint, field) {
-    var col = (field === "1h") ? "checked_1h" :
+    var col = (field === "15m") ? "checked_15m" :
+              (field === "30m") ? "checked_30m" :
+              (field === "1h") ? "checked_1h" :
               (field === "3h") ? "checked_3h" :
               (field === "6h") ? "checked_6h" :
               (field === "24h") ? "checked_24h" : null;

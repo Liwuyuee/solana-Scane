@@ -35,7 +35,9 @@ class PaperTrader {
       return;
     }
 
-    // 启动定时回查（1h / 3h / 6h / 24h）
+    // 启动定时回查
+    this.#schedule(mint, "15m", 900000);
+    this.#schedule(mint, "30m", 1800000);
     this.#schedule(mint, "1h", 3600000);
     this.#schedule(mint, "3h", 10800000);
     this.#schedule(mint, "6h", 21600000);
@@ -50,6 +52,8 @@ class PaperTrader {
       if (price && price > 0) {
         this.store.updateSnapshotPrice(mint, "initial", price);
         // 拿到价格了，安排后续回查
+        this.#schedule(mint, "15m", 900000);
+        this.#schedule(mint, "30m", 1800000);
         this.#schedule(mint, "1h", 3600000);
         this.#schedule(mint, "3h", 10800000);
         this.#schedule(mint, "6h", 21600000);
