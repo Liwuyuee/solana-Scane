@@ -123,6 +123,13 @@ class Notifier {
     }
     msg += "\n";
 
+    // ─── 创作者评分 ────────────────────────────────
+    var cs = ev && ev.creatorScore;
+    if (cs !== undefined && cs !== 0) {
+      var emoji = cs > 0 ? "✅" : "⚠️";
+      msg += "👤 **创作者 " + emoji + "** " + (cs > 0 ? "+" : "") + cs + "（不计入总分）\n\n";
+    }
+
     // ─── Highlights ────────────────────────────────
     if (highlights.length > 0) {
       msg += "**✨ Highlights**\n";

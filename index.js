@@ -132,6 +132,10 @@ async function main() {
 
     // 3) 四项评分 + 涨幅潜力 + 叙事生成
     const evalResult = analyzer.evaluate(report, devInfo, token.dexInfo);
+    // 创作者评分（单独显示，不计入总分）
+    if (token.creator) {
+      evalResult.creatorScore = devTracker.getCreatorScore(token.creator);
+    }
     // Use momentum scanner's one-line summary if available
     if (token.summary) {
       evalResult.summary = token.summary;

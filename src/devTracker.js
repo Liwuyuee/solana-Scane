@@ -132,17 +132,19 @@ class DevTracker {
   }
 
   /**
-   * 手动上报 rug 事件（由 Rug Alarm 调用）
-   * 推送后发现价格暴跌时调用此方法记录
+   * 创作者评分
    */
-  reportRug(creator) {
-    if (!creator || creator.length < 30) return;
+  getCreatorScore(creator) {
+    if (!creator || creator.length < 30) return 0;
     var record = this.db.get(creator);
-    if (record) {
-      record.ruggedCount++;
-      console.log("   👤 部署者 " + creator.slice(0, 8) + "... Rug计数 +1（当前 " + record.ruggedCount + " 次）");
-    }
+    if (!record) return 0;
+    var score = 0;
+    if (record.tokensCreated >= 2) score += 0.5;
+    if (record.tokensCreated >= 5) score += 0.5;
+    if (record.ruggedCount > 0) score -= 2;
+    return Math.max(-2, Math.min(2, score));
   }
+
 }
 
 module.exports = { DevTracker };
