@@ -1,5 +1,23 @@
 require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
+// 防重复启动锁
+const fs = require("fs");
+const path = require("path");
+const LOCK_FILE = path.join(__dirname, "data", "bot.lock");
+try {
+  if (fs.existsSync(LOCK_FILE)) {
+    var oldPid = parseInt(fs.readFileSync(LOCK_FILE, "utf8"), 10);
+    try {
+      process.kill(oldPid, 0); // 检查进程是否存在
+      console.log("⚠️ 已有 bot 在运行（PID " + oldPid + "），退出");
+      process.exit(0);
+    } catch (e) { /* 旧进程已死，继续 */ }
+  }
+  fs.writeFileSync(LOCK_FILE, String(process.pid));
+  // 进程退出时清理锁
+  process.on("exit", function() { try { fs.unlinkSync(LOCK_FILE); } catch(e) {} });
+} catch (e) {}
+
 // Prevent crash on unhandled promise rejections (RPC timeouts, network issues)
 process.on("unhandledRejection", function(err) {
   console.warn("  ⚠️ 未捕获的异常（已忽略）:", (err && err.message) || err);
